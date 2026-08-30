@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.db
+*.sqlite3
+out/*.json
+out/*.md
+!out/.gitkeep
+web/node_modules/
+web/.next/
+.DS_Store
+
+# Regenerated exactly by 'python -m harness.generate' from the recorded seed,
+# so committing several MB of JSON would add nothing a command cannot rebuild.
+data/*.json
