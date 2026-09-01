@@ -22,6 +22,7 @@ from engine.schema import (
     Payment,
     PaymentMethod,
     PaymentStatus,
+    Settlement,
     rupees,
 )
 from engine.store import DataStore
@@ -113,12 +114,42 @@ def dataset() -> dict:
             created_at=NOON_IST - timedelta(days=6),
         ),
     ]
+    # One batch that reconciles to the rupee, one short-paid, one claiming a
+    # payment that does not exist. Enough for the reconciler's three settlement
+    # exception classes without reaching for the generated month.
+    settlements = [
+        Settlement(
+            settlement_id="s_ok",
+            utr="UTR000000000001",
+            amount_paise=rupees(500) - 1_000,
+            fee_paise=1_000,
+            settled_at=NOON_IST - timedelta(days=5),
+            payment_ids=["p_captured"],
+        ),
+        Settlement(
+            settlement_id="s_short",
+            utr="UTR000000000002",
+            amount_paise=rupees(100),
+            fee_paise=1_000,
+            settled_at=NOON_IST - timedelta(days=4),
+            payment_ids=["p_captured"],
+        ),
+        Settlement(
+            settlement_id="s_ghost",
+            utr="UTR000000000003",
+            amount_paise=rupees(500) - 1_000,
+            fee_paise=1_000,
+            settled_at=NOON_IST - timedelta(days=3),
+            payment_ids=["p_captured", "p_not_a_real_payment"],
+        ),
+    ]
     return {
         "batch_id": "test_batch",
         "seed": 0,
         "customers": [c.model_dump(mode="json") for c in customers],
         "invoices": [i.model_dump(mode="json") for i in invoices],
         "payments": [p.model_dump(mode="json") for p in payments],
+        "settlements": [s.model_dump(mode="json") for s in settlements],
     }
 
 

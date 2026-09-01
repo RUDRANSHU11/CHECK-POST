@@ -107,7 +107,7 @@ def test_stats_reflects_submitted_actions(client):
 
 def test_rules_endpoint_exposes_the_rulebook(client):
     r = client.get("/v1/rules").json()
-    assert len(r["rules"]) == 13
+    assert len(r["rules"]) == 16
     assert r["thresholds"]["max_contacts_per_24h"] == 2
 
 

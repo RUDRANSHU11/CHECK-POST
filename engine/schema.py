@@ -137,12 +137,24 @@ class AgentName(str, Enum):
 
 
 class OutcomeResult(str, Enum):
+    # recovery
     RECOVERED = "recovered"
     PARTIAL = "partial"
     NO_RESPONSE = "no_response"
     BOUNCED = "bounced"
     FAILED = "failed"
     REFUNDED = "refunded"
+    # risk — the two that matter are deliberately named for what they cost,
+    # not for whether the agent was pleased with itself. A block is either a
+    # loss prevented or a customer turned away, and the scorecard has to carry
+    # both or it is marketing.
+    PREVENTED_FRAUD = "prevented_fraud"
+    LOST_SALE = "lost_sale"
+    REVIEWED_FRAUD = "reviewed_fraud"
+    REVIEWED_CLEAN = "reviewed_clean"
+    # reconcile
+    MATCHED = "matched"
+    UNMATCHED = "unmatched"
 
 
 # --------------------------------------------------------------------------- #
@@ -186,6 +198,16 @@ MONEY_OUT_ACTIONS: frozenset[ActionType] = frozenset(
         ActionType.ISSUE_REFUND,
         ActionType.OFFER_DISCOUNT,
         ActionType.WRITE_OFF,
+    }
+)
+
+#: Actions the risk agent may take. Neither costs the merchant a fee, but a
+#: block costs the whole sale when it is wrong, which is why the economics gate
+#: prices them separately from anything in the recovery ladder.
+RISK_ACTIONS: frozenset[ActionType] = frozenset(
+    {
+        ActionType.BLOCK_ORDER,
+        ActionType.FLAG_FOR_REVIEW,
     }
 )
 
@@ -259,6 +281,32 @@ class Payment(Base):
         )
 
 
+class Settlement(Base):
+    """One credit from the acquiring bank into the merchant's account.
+
+    The bank pays out in batches, net of its fee, and its idea of which payments
+    are in a batch is the only record either side can point at. Reconciliation is
+    the job of proving the merchant's books and the bank's batch agree — and
+    saying precisely where they do not, rather than quietly plugging the gap.
+
+    ``amount_paise`` is what actually landed (net). ``payment_ids`` is what the
+    bank says it paid for. Neither is trusted: the reconciler re-derives the
+    gross from the merchant's own payment records and compares.
+    """
+
+    settlement_id: str
+    #: Bank reference. What a human would quote when phoning the acquirer.
+    utr: str
+    #: Net amount credited, after the acquirer's fee.
+    amount_paise: int
+    #: Fee the bank says it deducted.
+    fee_paise: int
+    settled_at: datetime
+    #: The bank's claim about what this batch covers. May reference a payment the
+    #: merchant has never heard of — that is one of the exception classes.
+    payment_ids: list[str] = Field(default_factory=list)
+
+
 class ActionRequest(Base):
     """What an agent asks Checkpost for permission to do.
 
@@ -274,6 +322,7 @@ class ActionRequest(Base):
     customer_id: str
     invoice_id: str | None = None
     payment_id: str | None = None
+    settlement_id: str | None = None
     #: Money the action moves (refund, discount). Zero for messages.
     amount_paise: int = 0
     #: The agent's plain-language justification, shown in the live decision feed.
@@ -301,6 +350,10 @@ class Decision(Base):
     results: list[RuleResult] = Field(default_factory=list)
     cost_paise: int = 0
     expected_recovery_paise: int = 0
+    #: The risk score the *gateway* computed, on risk actions. Recorded next to
+    #: the verdict so an auditor can see what the layer believed, independently
+    #: of what the agent claimed in its rationale.
+    risk_score: float | None = None
     decided_at: datetime = Field(default_factory=utcnow)
     policy_version: str = "0"
 

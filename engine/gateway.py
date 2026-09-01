@@ -26,12 +26,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from engine import economics, policy
+from engine import economics, policy, risk_model
 from engine.ledger import Ledger
 from engine.policy import PolicyContext
 from engine.schema import (
     ACTION_COST_PAISE,
     CONTACT_ACTIONS,
+    RISK_ACTIONS,
     ActionRequest,
     ActionType,
     Decision,
@@ -123,18 +124,63 @@ class Gateway:
         cutoff = now - CONTACT_WINDOW
         return sum(1 for t in self._contacts.get(customer_id, []) if t >= cutoff)
 
+    def _risk_facts(self, req: ActionRequest, payment) -> tuple[float | None, list[str]]:
+        """Score the payment ourselves.
+
+        The agent's own score arrives on ``req.evidence`` and is not consulted
+        here. That separation is the whole reason a risk agent can be allowed to
+        exist: it proposes a block and supplies its reasoning, and the layer
+        underneath re-derives the number from the merchant's records before
+        anything is refused on the strength of it.
+        """
+        if req.action not in RISK_ACTIONS or payment is None:
+            return None, []
+        result = risk_model.score(
+            payment,
+            self.store.customer(payment.customer_id),
+            self.store.payments_by_customer(payment.customer_id),
+        )
+        return result.score, result.names
+
+    def _settlement_facts(self, req: ActionRequest) -> tuple[object, int, list[str]]:
+        """Re-derive the batch total from the merchant's own payment records.
+
+        The bank's ``amount_paise`` is its claim; this is ours. Reconciliation is
+        the comparison, so the comparison must not be computed from one side.
+        """
+        settlement = self.store.settlement(req.settlement_id)
+        if settlement is None:
+            return None, 0, []
+        gross = 0
+        unknown: list[str] = []
+        for pid in settlement.payment_ids:
+            payment = self.store.payment(pid)
+            if payment is None:
+                unknown.append(pid)
+            else:
+                gross += payment.amount_paise
+        return settlement, gross, unknown
+
     def build_context(self, req: ActionRequest, now: datetime) -> PolicyContext:
+        payment = self.store.payment(req.payment_id)
+        risk_score, risk_signals = self._risk_facts(req, payment)
+        settlement, gross, unknown = self._settlement_facts(req)
         return PolicyContext(
             now=now,
             customer=self.store.customer(req.customer_id),
             invoice=self.store.invoice(req.invoice_id),
-            payment=self.store.payment(req.payment_id),
+            payment=payment,
             contacts_last_24h=self._contacts_in_window(req.customer_id, now),
             attempts_on_invoice=self._attempts.get(req.invoice_id or "", 0),
             spent_on_invoice=self._spent.get(req.invoice_id or "", 0),
             refunded_paise=self._refunded.get(req.payment_id or "", 0),
             used_idempotency_keys=self._used_keys,
             human_approved=req.request_id in self._approved_requests,
+            risk_score=risk_score,
+            risk_signals=risk_signals,
+            settlement=settlement,
+            settlement_gross_paise=gross,
+            settlement_unknown_ids=unknown,
         )
 
     # ------------------------------------------------------------------ #
@@ -170,6 +216,7 @@ class Gateway:
             expected_recovery_paise=(
                 assessment.expected_recovery_paise if assessment else 0
             ),
+            risk_score=ctx.risk_score,
             decided_at=now,
             policy_version=policy.POLICY_VERSION,
         )
@@ -185,6 +232,7 @@ class Gateway:
             customer_id=req.customer_id,
             invoice_id=req.invoice_id,
             payment_id=req.payment_id,
+            settlement_id=req.settlement_id,
             amount_paise=req.amount_paise,
             idempotency_key=req.idempotency_key,
             rationale=req.rationale,

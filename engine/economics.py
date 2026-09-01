@@ -42,6 +42,7 @@ from engine.policy import PolicyContext
 from engine.schema import (
     ACTION_COST_PAISE,
     CONTACT_ACTIONS,
+    RISK_ACTIONS,
     ActionRequest,
     ActionType,
     FailureReason,
@@ -50,7 +51,7 @@ from engine.schema import (
     fmt,
 )
 
-ECONOMICS_VERSION = "1.0"
+ECONOMICS_VERSION = "1.1"
 
 # --------------------------------------------------------------------------- #
 # The model — every number is here, and every number is arguable.
@@ -109,13 +110,29 @@ MARGIN = 1.25
 #: individually-justified nudges add up to more than the debt.
 MAX_SPEND_FRACTION = 0.20
 
-#: Actions with no recovery dimension. The gate has no opinion on these — the
-#: risk agent's block/flag economics are a different calculation (expected fraud
-#: loss against lost-sale cost) and are not modelled yet.
+# --------------------------------------------------------------------------- #
+# The risk side of the ledger
+# --------------------------------------------------------------------------- #
+# A block is not free just because it costs no postage. Turning away a genuine
+# customer costs the sale and, usually, the customer. That number never appears
+# on an invoice, which is exactly why a fraud system left to its own devices
+# blocks too much: every catch is visible and every false positive is somebody
+# else's problem. Pricing it here is what stops that drift.
+
+#: What a wrongly blocked sale costs, as a multiple of the sale itself. Above 1.0
+#: because the customer does not come back and does tell people. This is the most
+#: arguable number in the file, and it should be argued about.
+LOST_SALE_MULTIPLIER = 1.6
+
+#: Probability an analyst reaches the right answer on a flagged payment. Review
+#: is good, not perfect, and pricing it at 1.0 would make flagging look free.
+REVIEW_CATCH_RATE = 0.80
+
+#: Actions with no economic dimension the gate can model. Refunds and write-offs
+#: are settled by the rulebook's ceilings, and matching a settlement moves no
+#: money on its own.
 NO_OPINION: frozenset[ActionType] = frozenset(
     {
-        ActionType.BLOCK_ORDER,
-        ActionType.FLAG_FOR_REVIEW,
         ActionType.MATCH_SETTLEMENT,
         ActionType.WRITE_OFF,
         ActionType.ISSUE_REFUND,
@@ -196,7 +213,76 @@ def cost_of(req: ActionRequest) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def assess_risk(req: ActionRequest, ctx: PolicyContext) -> Assessment:
+    """Is blocking or reviewing this payment worth what it costs to be wrong?
+
+    The probability used here is ``ctx.risk_score`` — the number the *gateway*
+    recomputed from the merchant's records. The agent's own estimate is on
+    ``req.evidence`` and is deliberately not read: an action priced from the
+    proposer's own confidence is not gated at all.
+
+    ``expected_recovery_paise`` carries the expected loss prevented, and
+    ``cost_paise`` the expected cost of being wrong. Same two columns as the
+    recovery side, so a denial from here reads the same way in the ledger.
+    """
+    payment = ctx.payment
+    if payment is None:
+        return Assessment(applicable=False)
+
+    p = ctx.risk_score if ctx.risk_score is not None else 0.0
+    value = payment.amount_paise
+
+    if req.action is ActionType.BLOCK_ORDER:
+        prevented = int(p * value)
+        lost_sale = int((1.0 - p) * value * LOST_SALE_MULTIPLIER)
+        a = Assessment(
+            applicable=True,
+            probability=p,
+            outstanding_paise=value,
+            expected_recovery_paise=prevented,
+            cost_paise=lost_sale,
+        )
+        if prevented <= lost_sale:
+            a.verdict = Verdict.DENY
+            a.reason = (
+                f"not worth blocking: {p:.0%} risk on {fmt(value)} is {fmt(prevented)} "
+                f"of expected fraud prevented, against {fmt(lost_sale)} of expected "
+                f"lost sale from turning away a probably-genuine customer"
+            )
+            return a
+        a.reason = (
+            f"worth blocking: {p:.0%} risk on {fmt(value)} is {fmt(prevented)} of "
+            f"expected fraud prevented against {fmt(lost_sale)} of expected lost sale"
+        )
+        return a
+
+    # flag for review
+    caught = int(p * value * REVIEW_CATCH_RATE)
+    cost = ACTION_COST_PAISE[ActionType.FLAG_FOR_REVIEW]
+    a = Assessment(
+        applicable=True,
+        probability=p,
+        outstanding_paise=value,
+        expected_recovery_paise=caught,
+        cost_paise=cost,
+    )
+    if caught < cost * MARGIN:
+        a.verdict = Verdict.DENY
+        a.reason = (
+            f"not worth reviewing: {fmt(cost)} of analyst time to examine "
+            f"{fmt(value)} at {p:.0%} risk, worth {fmt(caught)} expected"
+        )
+        return a
+    a.reason = (
+        f"worth reviewing: {fmt(caught)} expected ({p:.0%} of {fmt(value)}, "
+        f"caught {REVIEW_CATCH_RATE:.0%} of the time) against {fmt(cost)} of analyst time"
+    )
+    return a
+
+
 def assess(req: ActionRequest, ctx: PolicyContext) -> Assessment:
+    if req.action in RISK_ACTIONS:
+        return assess_risk(req, ctx)
     if req.action in NO_OPINION or ctx.invoice is None:
         return Assessment(applicable=False)
 

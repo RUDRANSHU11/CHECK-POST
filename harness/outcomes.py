@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from engine.economics import REVIEW_CATCH_RATE
 from engine.schema import (
     ActionRequest,
     ActionType,
@@ -219,3 +220,166 @@ class OutcomeSimulator:
             amount_recovered_paise=0,
             occurred_at=now,
         )
+
+
+# --------------------------------------------------------------------------- #
+# What a block or a review was actually worth
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class RiskOutcomeSimulator:
+    """Resolves risk actions against the truth about who was really a fraudster.
+
+    The asymmetry this exists to record: a block that was right prevents a loss,
+    and a block that was wrong destroys a sale. Both are money, both belong on
+    the scorecard, and a fraud system that reports only the first is the reason
+    nobody trusts fraud numbers.
+
+    A *flag* is deliberately cheap in both directions. An analyst who waves a
+    genuine customer through costs the merchant fifteen rupees and nothing else,
+    which is exactly why the middle of the score range routes here instead of to
+    a block.
+    """
+
+    truth: dict
+    prevented_paise: int = 0
+    lost_sale_paise: int = 0
+    blocked_fraud: int = 0
+    blocked_genuine: int = 0
+    reviewed_fraud: int = 0
+    reviewed_clean: int = 0
+    #: Payments the risk agent looked at, so "what got through" can be counted
+    #: over the population that was actually screened rather than the whole book.
+    judged: set[str] = field(default_factory=set)
+    #: Fraud that was screened and stopped, by payment id.
+    stopped: set[str] = field(default_factory=set)
+
+    def _is_fraud(self, payment_id: str) -> bool:
+        return bool(self.truth.get("payments", {}).get(payment_id, {}).get("is_fraud"))
+
+    def _rng(self, payment_id: str) -> random.Random:
+        return random.Random(f"{self.truth['seed']}:review:{payment_id}")
+
+    def observe(
+        self, req: ActionRequest, decision: Decision, now: datetime
+    ) -> Outcome | None:
+        if decision.verdict is not Verdict.ALLOW or not req.payment_id:
+            return None
+
+        pid = req.payment_id
+        self.judged.add(pid)
+        fraud = self._is_fraud(pid)
+
+        if req.action is ActionType.BLOCK_ORDER:
+            if fraud:
+                self.prevented_paise += req.amount_paise
+                self.blocked_fraud += 1
+                self.stopped.add(pid)
+                result = OutcomeResult.PREVENTED_FRAUD
+            else:
+                self.lost_sale_paise += req.amount_paise
+                self.blocked_genuine += 1
+                result = OutcomeResult.LOST_SALE
+            return Outcome(
+                outcome_id="out_" + req.request_id.split("_", 1)[-1],
+                request_id=req.request_id,
+                result=result,
+                amount_recovered_paise=req.amount_paise if fraud else 0,
+                occurred_at=now,
+            )
+
+        if req.action is ActionType.FLAG_FOR_REVIEW:
+            if fraud and self._rng(pid).random() < REVIEW_CATCH_RATE:
+                self.prevented_paise += req.amount_paise
+                self.reviewed_fraud += 1
+                self.stopped.add(pid)
+                result = OutcomeResult.REVIEWED_FRAUD
+                recovered = req.amount_paise
+            else:
+                self.reviewed_clean += 1
+                result = OutcomeResult.REVIEWED_CLEAN
+                recovered = 0
+            return Outcome(
+                outcome_id="out_" + req.request_id.split("_", 1)[-1],
+                request_id=req.request_id,
+                result=result,
+                amount_recovered_paise=recovered,
+                occurred_at=now,
+            )
+
+        return None
+
+    def missed(self, screened: list) -> tuple[int, int]:
+        """Fraud that went through: (count, paise).
+
+        Counted over the payments the agent actually screened. Charging it for
+        fraud on payments nobody showed it would be measuring the harness, not
+        the agent.
+        """
+        count = 0
+        total = 0
+        for payment in screened:
+            pid = payment.payment_id
+            if self._is_fraud(pid) and pid not in self.stopped:
+                count += 1
+                total += payment.amount_paise
+        return count, total
+
+
+#: How often the person working the fraud queue reaches the right answer. Not
+#: 1.0: a human reviewer is better than the model on the cases the model was
+#: unsure about, and still wrong sometimes. Setting it to 1.0 would make
+#: escalation a free correctness oracle and every ceiling in the rulebook would
+#: look costless, which is the opposite of the point.
+ANALYST_ACCURACY = 0.85
+
+
+@dataclass
+class HumanReviewer:
+    """The person who works the escalation queue overnight.
+
+    Only the *fraud* queue. A block that needs a signature is time-critical —
+    the payment is settling now — so it is reviewed within a day or the decision
+    makes itself. Escalated recovery work is not like that: it goes on a list,
+    and the scorecard reports it as pending rather than pretending somebody
+    cleared it. Simulating a human who promptly resolves everything would quietly
+    delete the largest real cost of an escalation, which is that it waits.
+
+    Reads ground truth, which is why it lives in ``harness/``.
+    """
+
+    truth: dict
+    accuracy: float = ANALYST_ACCURACY
+    approved: int = 0
+    rejected: int = 0
+
+    def _rng(self, payment_id: str) -> random.Random:
+        """Seeded on the payment, never on the request.
+
+        ``request_id`` is a uuid4 minted fresh on every run, so an analyst keyed
+        on it decides differently each time and the scorecard stops being
+        reproducible — the fraud figures moved by nearly a lakh between two runs
+        of the same seed before this was found. Anything that *decides* an
+        outcome has to key on something the dataset fixes.
+        """
+        return random.Random(f"{self.truth['seed']}:analyst:{payment_id}")
+
+    def approves_block(self, req: ActionRequest) -> bool:
+        """Would this analyst sign off on blocking that payment?
+
+        They are right ``accuracy`` of the time, in both directions: they clear
+        genuine fraud, and they occasionally wave through a real customer's
+        payment into a block. The second kind is where a false positive that no
+        model produced comes from.
+        """
+        fraud = bool(
+            self.truth.get("payments", {}).get(req.payment_id, {}).get("is_fraud")
+        )
+        correct = self._rng(req.payment_id or "").random() < self.accuracy
+        decision = fraud if correct else not fraud
+        if decision:
+            self.approved += 1
+        else:
+            self.rejected += 1
+        return decision
