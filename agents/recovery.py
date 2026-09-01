@@ -45,7 +45,6 @@ from engine.schema import (
     Payment,
     PaymentStatus,
     Verdict,
-    utcnow,
 )
 from engine.store import DataStore
 
@@ -287,6 +286,12 @@ class RecoveryAgent:
     #: The agent's own tally of what it has tried. Intentionally its own copy,
     #: not a read of the gateway's counters — see module docstring.
     tried: dict[str, int] = field(default_factory=dict)
+    #: Invoices handed to a human or written off. An escalation is how a chase
+    #: *ends*: the invoice now belongs to a person, and an agent that keeps
+    #: proposing it every day re-buys the same handover at 50.00 a time. Over
+    #: five days that is a rounding error, which is why it survived day 3; over
+    #: a month it is the largest line in the cost column.
+    closed: set[str] = field(default_factory=set)
 
     def work(
         self, invoice: Invoice, now: datetime
@@ -296,6 +301,9 @@ class RecoveryAgent:
         Returns the request alongside the verdict: the harness needs to know what
         was asked for, not just what was decided, to resolve the outcome.
         """
+        if invoice.invoice_id in self.closed:
+            return None
+
         payments = self.store.payments_for(invoice.invoice_id)
         attempts = self.tried.get(invoice.invoice_id, 0)
 
@@ -329,6 +337,15 @@ class RecoveryAgent:
         # The agent counts what it *tried*, not what was allowed. From its own
         # point of view a refusal is still a turn taken.
         self.tried[invoice.invoice_id] = attempts + 1
+
+        # A handover that was actually granted ends this agent's involvement.
+        # A refused one does not: the invoice is still the agent's problem.
+        if (
+            decision.verdict is Verdict.ALLOW
+            and action in (ActionType.ESCALATE_TO_HUMAN, ActionType.WRITE_OFF)
+        ):
+            self.closed.add(invoice.invoice_id)
+
         return request, decision
 
     def run(

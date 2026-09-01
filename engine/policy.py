@@ -34,12 +34,14 @@ from engine.schema import (
     InvoiceStatus,
     Customer,
     Payment,
+    RISK_ACTIONS,
     RuleResult,
+    Settlement,
     Verdict,
     fmt,
 )
 
-POLICY_VERSION = "1.0"
+POLICY_VERSION = "1.1"
 
 # --------------------------------------------------------------------------- #
 # Thresholds — every tunable number in one block, so the rules below read as
@@ -52,6 +54,22 @@ MAX_RECOVERY_ATTEMPTS = 4
 REFUND_HUMAN_THRESHOLD_PAISE = 500_000  # 5,000.00
 WRITE_OFF_HUMAN_THRESHOLD_PAISE = 100_000  # 1,000.00
 DISCOUNT_MAX_FRACTION = 0.30  # never discount more than 30% of the invoice
+
+#: Blocking an order this large is a decision with a real downside when it is
+#: wrong — a genuine customer turned away at the till, who does not come back.
+#: Above the line a person owns it. Below it the economics gate is enough.
+BLOCK_HUMAN_THRESHOLD_PAISE = 2_500_000  # 25,000.00
+
+#: How far an agent's claimed risk score may sit above the score the gateway
+#: recomputes from the merchant's own records before the request is refused
+#: outright. Small gaps are model drift; large ones mean the agent is asserting
+#: a justification the evidence does not carry.
+RISK_CLAIM_TOLERANCE = 0.15
+
+#: Rounding slack when checking a settlement against our own books. A rupee, not
+#: a percentage: a tolerance that scales with the batch is a tolerance that hides
+#: a large error inside a large batch.
+SETTLEMENT_TOLERANCE_PAISE = 100  # 1.00
 
 # India does not observe DST, so a fixed offset is exactly correct here and
 # avoids depending on the tzdata package, which is not installed with CPython on
@@ -116,6 +134,22 @@ class PolicyContext:
     used_idempotency_keys: set[str] = field(default_factory=set)
     #: True once a human has signed off on this specific request.
     human_approved: bool = False
+
+    # -- risk ------------------------------------------------------------- #
+    #: The risk score the *gateway* computed from the merchant's records, not
+    #: the one the agent claimed. None when the action has no risk dimension.
+    #: Rules compare the two; the agent's copy arrives on req.evidence and is
+    #: treated as an assertion, because that is what it is.
+    risk_score: float | None = None
+    #: Names of the signals that fired, for the reason string.
+    risk_signals: list[str] = field(default_factory=list)
+
+    # -- reconciliation --------------------------------------------------- #
+    settlement: Settlement | None = None
+    #: Gross the merchant's own payment records account for in this settlement.
+    settlement_gross_paise: int = 0
+    #: Payment ids the bank claims are in the batch that we have no record of.
+    settlement_unknown_ids: list[str] = field(default_factory=list)
 
 
 Rule = Callable[[ActionRequest, PolicyContext], RuleResult | None]
@@ -383,6 +417,13 @@ def r13_prompt_injection(req: ActionRequest, ctx: PolicyContext) -> RuleResult |
     for key, value in req.evidence.items():
         if isinstance(value, str):
             suspects.append((f"evidence.{key}", value))
+        elif isinstance(value, (list, tuple)):
+            # The risk agent carries its signals as a list of strings. An
+            # injection that landed in a list rather than a bare string would
+            # otherwise walk straight past this guard.
+            for n, item in enumerate(value):
+                if isinstance(item, str):
+                    suspects.append((f"evidence.{key}[{n}]", item))
 
     for source, text in suspects:
         for pattern in INJECTION_PATTERNS:
@@ -397,6 +438,123 @@ def r13_prompt_injection(req: ActionRequest, ctx: PolicyContext) -> RuleResult |
                     f"the agent was reading attacker-controlled input",
                 )
     return None
+
+
+@rule
+def r14_block_ceiling(req: ActionRequest, ctx: PolicyContext) -> RuleResult | None:
+    """Blocking a large order is a decision a person should own.
+
+    The asymmetry is the point. A wrong block on a small order costs a small
+    sale. A wrong block on a large one costs the sale, the customer, and a
+    support ticket that ends up on somebody's desk anyway — so it may as well
+    start there.
+    """
+    if req.action is not ActionType.BLOCK_ORDER:
+        return None
+    value = req.amount_paise or (ctx.payment.amount_paise if ctx.payment else 0)
+    if value > BLOCK_HUMAN_THRESHOLD_PAISE and not ctx.human_approved:
+        return _human(
+            "block_ceiling",
+            f"blocking {fmt(value)} is above the {fmt(BLOCK_HUMAN_THRESHOLD_PAISE)} "
+            f"an agent may refuse on its own — a wrong block this size costs more "
+            f"than the review does",
+        )
+    return _ok("block_ceiling", f"{fmt(value)} is within the automatic block limit")
+
+
+@rule
+def r15_risk_evidence(req: ActionRequest, ctx: PolicyContext) -> RuleResult | None:
+    """An agent may not assert its way past the evidence.
+
+    Two failures this catches, and the second is the one that matters:
+
+    * a block proposed with no signals behind it at all;
+    * a block proposed with a *claimed* risk score the merchant's own records do
+      not support. The agent's number arrives on ``req.evidence``, where it is
+      untrusted data like everything else there. The gateway recomputes the score
+      from the payment history and puts its own answer on the context. When the
+      claim runs far ahead of the recomputation, the request is refused and the
+      gap is written into the reason — which is what an auditor needs to see.
+
+    This is the rule that would stop a prompt-injected risk agent from blocking
+    a competitor's orders because an invoice memo told it to.
+    """
+    if req.action not in RISK_ACTIONS:
+        return None
+    if ctx.payment is None:
+        return _deny(
+            "risk_evidence",
+            "risk action names no payment, so there is nothing to score",
+        )
+
+    computed = ctx.risk_score if ctx.risk_score is not None else 0.0
+
+    if req.action is ActionType.BLOCK_ORDER and not ctx.risk_signals:
+        return _deny(
+            "risk_evidence",
+            f"no fraud signal fired on payment {ctx.payment.payment_id}; "
+            f"a block with nothing behind it is a lost sale with extra steps",
+        )
+
+    claimed = req.evidence.get("claimed_score")
+    if isinstance(claimed, (int, float)) and claimed > computed + RISK_CLAIM_TOLERANCE:
+        return _deny(
+            "risk_evidence",
+            f"agent claims a risk score of {float(claimed):.2f}; the merchant's own "
+            f"records support {computed:.2f} "
+            f"({', '.join(ctx.risk_signals) or 'no signals'}) — refusing an "
+            f"assertion the evidence does not carry",
+        )
+
+    return _ok(
+        "risk_evidence",
+        f"risk {computed:.2f} from {len(ctx.risk_signals)} signal(s): "
+        f"{', '.join(ctx.risk_signals) or 'none'}",
+    )
+
+
+@rule
+def r16_settlement_discrepancy(req: ActionRequest, ctx: PolicyContext) -> RuleResult | None:
+    """A settlement may only be marked matched when it actually reconciles.
+
+    The failure mode this exists to prevent is the quiet one. A reconciler that
+    marks everything matched produces a clean report, a balanced set of books
+    and a hole in the merchant's cash position that nobody finds for a quarter.
+    Anything that does not reconcile to the rupee stops here and becomes a named
+    exception on somebody's list.
+    """
+    if req.action is not ActionType.MATCH_SETTLEMENT:
+        return None
+    st = ctx.settlement
+    if st is None:
+        return _deny("settlement_discrepancy", "no such settlement in the merchant's records")
+
+    if ctx.settlement_unknown_ids:
+        shown = ", ".join(ctx.settlement_unknown_ids[:3])
+        more = "" if len(ctx.settlement_unknown_ids) <= 3 else f" (+{len(ctx.settlement_unknown_ids) - 3} more)"
+        return _human(
+            "settlement_discrepancy",
+            f"settlement {st.settlement_id} ({st.utr}) claims {len(ctx.settlement_unknown_ids)} "
+            f"payment(s) the merchant has no record of: {shown}{more}",
+        )
+
+    expected_net = ctx.settlement_gross_paise - st.fee_paise
+    gap = st.amount_paise - expected_net
+    if abs(gap) > SETTLEMENT_TOLERANCE_PAISE:
+        direction = "short" if gap < 0 else "over"
+        return _human(
+            "settlement_discrepancy",
+            f"settlement {st.settlement_id} ({st.utr}) credited {fmt(st.amount_paise)}; "
+            f"our records make it {fmt(expected_net)} "
+            f"({fmt(ctx.settlement_gross_paise)} gross less {fmt(st.fee_paise)} fee) — "
+            f"the bank is {fmt(abs(gap))} {direction}",
+        )
+
+    return _ok(
+        "settlement_discrepancy",
+        f"settlement {st.settlement_id} reconciles: {fmt(ctx.settlement_gross_paise)} gross "
+        f"less {fmt(st.fee_paise)} fee is the {fmt(st.amount_paise)} credited",
+    )
 
 
 # --------------------------------------------------------------------------- #

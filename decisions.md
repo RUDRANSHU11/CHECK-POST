@@ -433,3 +433,218 @@ would-pay-anyway invoice is credited to chasing, because nothing can distinguish
 the two. That is precisely the confound the day-4 holdout removes. A project
 whose pitch is honest measurement cannot print a flattering number without
 saying which way it is wrong.
+
+---
+
+## 2026-09-01 — Fraud is correlated with things an agent can see
+
+**Decision:** `is_fraudster` no longer sits independent of behaviour. Fraudsters
+open accounts days before using them (70% of them; the other 30% operate bought
+aged accounts), pay by card, and leave a burst of hard declines before one
+attempt lands. `harness/generate.py` builds that footprint deliberately.
+
+**Why:** The day-3 generator drew fraud as `rng.random() < 0.02` with nothing
+observable attached. Against that data no risk scorer can beat the 2% base rate,
+however good it is — there is no signal to find. The honest report would have
+been "the risk agent is noise", which is true of the data and says nothing about
+the agent. Real fraud leaves a footprint, so the synthetic fraud has to leave one
+or the scorecard measures the random seed instead of the scorer.
+
+**The part that was nearly a mistake:** the first version made the footprint
+*perfect* — every fraudster on a fresh account. The model then scored 1.00
+precision and the false-positive line of the scorecard came out at zero, which
+is the single number this project exists to print. `FRAUD_AGED_ACCOUNT_SHARE` and
+`GENUINE_RETRY_STORM_RATE` put the overlap back: rings that buy aged accounts,
+and genuine customers whose card keeps declining. Measured separation after the
+change: median account age 28 days against 453, median ticket ₹10,333 against
+₹1,357, prior declines 9 against 1 — strong, and not perfect.
+
+---
+
+## 2026-09-01 — Settlement error rates are inflated, and say so
+
+**Decision:** `UNKNOWN_PAYMENT_RATE` 0.08, `AMOUNT_MISMATCH_RATE` 0.10,
+`DUPLICATE_RATE` 0.05 per batch — far above what a real acquirer produces.
+
+**Why:** A month at realistic rates (well under 1%) yields one or two exceptions.
+That is not enough to tell a working reconciler from a broken one, in a test
+suite or in a five-minute demo. The reconciler is scored against the injected
+labels, so inflation costs nothing in honesty — as long as nobody quotes these as
+industry figures, which is why the constant block says so in the file.
+
+The same run also needed more batches: one settlement a day gave the month 30
+of them, so days are split into two to four batches as an acquirer actually pays
+out. 132 settlements, 103 clean, 29 carrying an injected error.
+
+---
+
+## 2026-09-01 — The gateway recomputes the risk score; it never takes the agent's
+
+**Decision:** The scoring model lives in `engine/risk_model.py`, not in
+`agents/risk.py`. The agent's score travels on `req.evidence["claimed_score"]` as
+an assertion. `Gateway.build_context` recomputes the score from the merchant's
+own payment records and puts *its* number on `PolicyContext.risk_score`, which is
+what `r15_risk_evidence` and the economics gate act on.
+
+**Why:** An agent that can assert its own risk score can justify any block it
+likes. That is not a hypothetical about a rogue agent — it is what an honest LLM
+does after reading a memo somebody wrote for it. The property that matters is not
+that two models exist; it is that the number the gate acts on was derived from
+data rather than supplied by the thing being policed. So both sides import the
+same function and only one of them is trusted to run it.
+
+`r15` refuses when the claim runs more than `RISK_CLAIM_TOLERANCE` ahead of the
+recomputation, and puts both numbers in the reason. Red-team case
+`risk_agent_overstates_its_score` is that path.
+
+**Consequence worth naming:** the risk agent is now very thin — score, compare to
+two thresholds, propose. That is a finding, not a shortcut. Once the score is
+computed somewhere auditable and the thresholds are written down, there is not
+much left in an autonomous fraud blocker. What was stopping companies shipping
+one was never the model.
+
+---
+
+## 2026-09-01 — A block is priced against the sale it destroys
+
+**Decision:** `economics.assess_risk` prices `BLOCK_ORDER` as expected fraud
+prevented (`p x value`) against expected lost sale (`(1-p) x value x
+LOST_SALE_MULTIPLIER`, multiplier 1.6). `FLAG_FOR_REVIEW` is priced against ₹15
+of analyst time at `REVIEW_CATCH_RATE` 0.80. Both left the `NO_OPINION` set.
+
+**Why:** A block costs no postage, so a fraud system left alone will block too
+much: every catch is visible and every false positive is somebody else's problem.
+Pricing the false positive is the only thing that stops the drift, and it makes
+the break-even a *consequence* of one stated constant rather than a threshold
+someone typed in — `m/(1+m)`, about 0.62 at 1.6. `test_the_block_break_even_
+follows_from_the_lost_sale_multiplier` asserts exactly that, so the number cannot
+be quietly detached from the reasoning behind it.
+
+1.6 is the most arguable constant in the codebase and should be argued about.
+
+---
+
+## 2026-09-01 — The recovery agent stops working an invoice once a human has it
+
+**Decision:** `RecoveryAgent.closed` — an invoice whose escalation or write-off
+was *allowed* is no longer the agent's. Refused handovers do not close it.
+
+**Why:** A bug that day 3's five-day runs could not surface. Past four attempts
+the planner proposes `ESCALATE_TO_HUMAN` every single day; the idempotency key
+carries the attempt count so it differs each time, `ESCALATE_TO_HUMAN` is
+deliberately outside `ATTEMPT_ACTIONS`, and nothing else stops it. Each one costs
+₹50. Over five days that is a rounding error. Over the 31-day replay it was on
+course to be the largest line in the cost column — an agent buying the same
+handover thirty times.
+
+The fix is in the agent rather than in the rulebook because it is not a policy
+question. Handing work to a person is exactly what the agent should do; doing it
+repeatedly is the agent failing to notice it already had.
+
+---
+
+## 2026-09-01 — The holdout is split by hash, not by shuffle
+
+**Decision:** `replay.assign_holdout` takes `blake2b(f"{seed}:{invoice_id}")` and
+compares the first four bytes against the fraction. No RNG, no shuffle.
+
+**Why:** Python salts `hash()` per process, so a holdout built on it would differ
+between the run that produced a number and the run that checks it — silently.
+Anyone holding the invoice ids and the seed can recompute this assignment and
+confirm the split was not chosen after seeing the outcome, which is the specific
+accusation an uplift claim has to be able to answer.
+
+---
+
+## 2026-09-01 — The uplift is reported with a confidence interval
+
+**Decision:** `bootstrap_uplift` resamples invoices within each group 1,000 times
+and reports a 95% interval next to the point estimate. The scorecard prints both,
+and flags when the interval crosses zero.
+
+**Why:** This was caught by a test, not by design, and the catch matters. On the
+full month the estimator lands within 10% of ground truth. On a 500-invoice
+fixture it was 88% off — the same estimator, the same code, a smaller sample. A
+point estimate with no interval reads as a measurement when it is a draw, which
+is precisely the overclaiming this project was built to refuse. Reporting
+₹6,30,056 with no interval on a book that supports ±₹4,00,000 would have been
+the project committing the sin it was written to expose.
+
+The test now asserts that the true value falls *inside the claimed interval*,
+rather than that the point estimate is near the truth with a tolerance loose
+enough to pass. Resampling at the invoice level is deliberate: the noise comes
+from which invoices landed in which group, so that is what gets resampled.
+
+---
+
+## 2026-09-01 — The analyst works the fraud queue and nothing else
+
+**Decision:** `HumanReviewer` in `harness/outcomes.py` clears escalated *blocks*
+overnight at 85% accuracy. Escalated recovery work is counted as pending and left
+that way.
+
+**Why:** Without a reviewer the layer escalated every block above ₹25,000 and
+nobody ever acted, so the largest fraud in the month sailed through and the risk
+numbers were misleading in the agent's favour — missed fraud ₹6,55,942 against
+₹2,19,047 prevented. Adding the reviewer inverted it to ₹2,13,421 against
+₹6,61,568.
+
+Only the fraud queue, because a block is time-critical — the payment is settling
+now — while escalated recovery goes on a list somebody works through on Monday.
+Simulating a human who promptly resolves everything would quietly delete the
+largest real cost of an escalation, which is that it waits. Accuracy is 0.85
+rather than 1.0 for the same reason: at 1.0 escalation becomes a free
+correctness oracle and every ceiling in the rulebook looks costless.
+
+The reviewer approves the *request*, and the agent resubmits; the rulebook runs
+again with the signature in hand. `r05` only records idempotency keys from
+allowed actions, so a `needs_human` decision leaves the key unused and the
+resubmission is not mistaken for a duplicate.
+
+---
+
+## 2026-09-01 — Two red-team cases were wrong, and the engine was right
+
+**Decision:** Both were fixed in `harness/redteam.py`, not in the engine.
+
+**Why it is worth recording:** the first run came out 16/18, and neither failure
+was a defect.
+
+`uneconomic_chase` expected a ₹4.50 call on a ₹40 invoice to be refused, citing
+the README's "₹80 of SMS to recover ₹40". The engine allowed it, correctly: a 28%
+chance of collecting ₹40 is worth ₹4.50. The README's claim is about *cumulative*
+spend, which is the budget cap, not expected value — they are separate checks for
+exactly this reason. The case now makes a second call and is refused at the 20%
+budget of ₹8.00.
+
+`block_with_no_evidence` expected `r15` to object and got `economics` instead.
+The payment it used had a prior history that fired `outsized_ticket`, so there
+*was* a signal and `r15` was right to stand aside. The case now uses an account
+with no history at all.
+
+Both were the test being wrong about the arithmetic. Recording them because a red
+team whose failures are always fixed in the engine is a red team nobody is
+reading carefully — and because the "right verdict from the wrong rule" check is
+what caught the second one. Verdict alone would have passed it.
+
+---
+
+## 2026-09-01 — Nothing that decides an outcome may key on a request id
+
+**Decision:** `HumanReviewer._rng` seeds on `payment_id`, not `request_id`.
+
+**Why:** `request_id` is a `uuid4` minted fresh on every run. The analyst keyed
+on it, so the same seed produced a different fraud figure each time — ₹6,61,568
+one run, ₹5,71,651 the next, with nothing in the output hinting that the number
+had moved. It was found by writing the README, not by a test: two numbers taken
+from two runs an hour apart did not agree.
+
+The rule this generalises to is now in `flow.md`'s conventions. Identity may be
+random; a *decision* has to key on something the dataset fixes. `test_the_same_
+seed_produces_the_same_scorecard` runs the whole replay twice and compares six
+figures, so this cannot come back quietly.
+
+Worth noting what the existing tests could not have caught: every seeded RNG in
+the harness was already deterministic *given its inputs*, and each was unit
+tested that way. The defect was in what was fed to one of them, which only a
+whole-run comparison could see.

@@ -43,24 +43,25 @@ Dependencies are pinned loosely in `requirements.txt` and installed into `.venv`
 checkpost/
 ├── engine/                 the layer itself
 │   ├── schema.py           every shared type + the action price list
-│   ├── policy.py           the rulebook — 13 rules
+│   ├── policy.py           the rulebook — 16 rules
 │   ├── ledger.py           hash-chained append-only log
 │   ├── gateway.py          the single door agents call
 │   ├── store.py            in-memory view of the merchant's data
 │   ├── api.py              FastAPI wrapper over the gateway
 │   ├── economics.py        the money check — is this attempt worth making?
+│   ├── risk_model.py       the fraud signals, recomputed by the gateway
 │   └── console.py          UTF-8 stdout so the rupee sign does not crash Windows
 ├── agents/
 │   ├── recovery.py         the recovery agent + both planners
-│   ├── risk.py             NOT WRITTEN YET — Day 4
-│   └── reconcile.py        NOT WRITTEN YET — Day 4
+│   ├── risk.py             scores a payment, proposes a block or a review
+│   └── reconcile.py        settlements against the merchant's own books
 ├── harness/
 │   ├── generate.py         synthetic merchant month
-│   ├── outcomes.py         what happened after an allowed action (reads truth)
-│   ├── batch.py            run the agent, print the first numbers
-│   ├── replay.py           NOT WRITTEN YET — Day 4
-│   └── redteam.py          NOT WRITTEN YET — Day 4
-├── tests/                  127 tests
+│   ├── outcomes.py         what happened afterwards + the analyst (reads truth)
+│   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
+│   ├── replay.py           80/20 treated vs holdout, and the scorecard
+│   └── redteam.py          18 attacks, each expecting a named rule to stop it
+├── tests/                  198 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -241,6 +242,10 @@ Agent-facing, in `data/dataset.json`:
   field where a poisoned PDF's contents land
 - **Payment** — `amount_paise`, `method`, `status`, `failure_reason`;
   `is_retryable` is derived from the failure reason
+- **Settlement** — `utr`, `amount_paise` (net, after the acquirer's fee),
+  `fee_paise`, `payment_ids`. The bank's *claim* about what it paid for; the
+  reconciler re-derives the gross from the merchant's own payment records and
+  compares
 
 Produced by the layer, in the ledger:
 
@@ -253,6 +258,11 @@ Scoring-only, in `data/ground_truth.json` — **no agent may read this**:
 
 - `would_pay_anyway` — pays with no contact at all; the holdout recovers these
 - `pays_if_contacted` — pays only because chased; this is the only real uplift
+- `payments[id].is_fraud` — blocking it prevents a loss, blocking its neighbour
+  costs a sale. Correlated with observable behaviour on purpose: uncorrelated
+  fraud would make any scorer indistinguishable from the base rate
+- `settlements[id].exception` — which of the four disagreements was injected
+- `unsettled_payment_ids` — captured payments no batch ever mentions
 
 Money is always integer paise. Never a float, never rupees.
 
@@ -285,6 +295,16 @@ Follow these so new code matches what is there:
   that is the shape of the bug that overstated recovery by 3.6×.
 - **New economic parameter?** Named constant at the top of `engine/economics.py`,
   never inline. A judge should be able to read the whole model in one screen.
+- **Never trust an agent's own assessment of itself.** A score, a confidence, a
+  claim that something reconciles — all of it arrives on `req.evidence` as an
+  assertion. If a rule or the gate needs the number, the *gateway* recomputes it
+  from the store and puts its own answer on `PolicyContext`. See
+  `_risk_facts` and `_settlement_facts` in `engine/gateway.py`.
+- **New red-team case?** Name the rule that must stop it, not just the verdict.
+  `harness/redteam.py` fails a case that gets the right answer from the wrong
+  rule — a coincidence stops working when the data moves.
+- **Any headline number gets an interval.** A point estimate with no interval
+  reads as a measurement when it is one draw. `bootstrap_uplift` is the pattern.
 - **CLI entry points call `setup_console()` first**, or the rupee sign crashes
   the run on Windows.
 - **Tests use a frozen clock** (`NOON_IST` / `NIGHT_IST` in `tests/conftest.py`).
@@ -307,9 +327,17 @@ cd C:\Users\rudra\checkpost
 # tests
 .venv\Scripts\python.exe -m pytest -q
 
-# run the recovery agent over a batch and print the numbers
+# the scorecard: all three agents, 80/20 treated vs holdout, whole month
+.venv\Scripts\python.exe -m harness.replay
+.venv\Scripts\python.exe -m harness.replay --block-threshold 0.45   # price the dial
+.venv\Scripts\python.exe -m harness.replay --llm                    # Gemini, if a key exists
+
+# the attacks — exits non-zero if anything got through
+.venv\Scripts\python.exe -m harness.redteam
+
+# day 3's runner, kept for comparison. No holdout, so its recovery figure is
+# the flattering one and it says so.
 .venv\Scripts\python.exe -m harness.batch --limit 400 --days 5
-.venv\Scripts\python.exe -m harness.batch --llm      # Gemini planner, if a key exists
 
 # serve — docs at http://127.0.0.1:8000/docs
 .venv\Scripts\python.exe -m uvicorn engine.api:app --reload
@@ -330,47 +358,75 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (127 tests green):**
+**Working, tested (198 tests green, red team 18/18):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
-  ₹68,25,601 outstanding, 82 opted-out customers, 22 poisoned memos,
-  634 would-pay-anyway vs 591 pay-only-if-chased
+  132 settlement batches, ₹76,08,874 outstanding, 79 opted-out customers,
+  23 poisoned memos, 622 would-pay-anyway vs 600 pay-only-if-chased,
+  23 fraud rings, 83 captured payments the bank never settled
 - Hash-chained ledger with triggers and a three-way `verify()`
-- Policy engine, 13 rules
-- Economics gate: expected value, attempt decay, staleness, 20% budget cap
+- Policy engine, 16 rules
+- Economics gate: expected value, attempt decay, staleness, 20% budget cap on
+  the recovery side; fraud-prevented against lost-sale on the risk side
 - Gateway: submit → rulebook → gate → logged, counters, restart, human approval
 - FastAPI surface over all of it
 - Recovery agent with a deterministic planner; Gemini planner written but unrun
-- Outcome simulator and a batch runner that prints the first scorecard
+- Risk agent over a shared, gateway-recomputed signal model
+- Reconciler with four named exception classes and an unsettled sweep
+- Replay harness: 80/20 treated vs holdout, bootstrap confidence interval
+- Red team: 18 attacks, each asserted against the rule that must stop it
 
-**Last batch run** — 400 invoices, 5 simulated days:
+**Last full replay** — every collectable invoice, 31 simulated days:
 
 ```
-Actions requested      384      allowed 312   denied 64   escalated 8
-Invoices settled        67
-Recovered, gross              ₹ 2,96,668
-  would have paid anyway      ₹ 1,75,877   (42 invoices — not earned)
-  attributable to chasing     ₹ 1,20,791   (25 invoices — biased upward)
-Cost of interventions         ₹   1,506.95
-Refusals: economics 33 · opt_out 21 · unretryable 9 · attempt_limit 8 · injection 5
-Ledger: 1,080 entries, intact
+Treated 964 invoices (₹61,42,080 book) · holdout 250 (₹14,60,398, never contacted)
+
+Recovered, treated                  ₹ 10,27,597
+Recovered, holdout scaled            ₹ 3,97,540    x4.21 from ₹94,523
+UPLIFT the agent caused              ₹ 6,30,056    95% CI ₹1,67,467 to ₹10,40,906
+
+Fraud prevented                      ₹ 6,61,568    27 blocked, 11 caught in review
+Lost sales, blocked genuine                  ₹ 0    0 customers turned away
+Fraud that got through               ₹ 2,13,421    12 payments
+
+Settlements checked 119 · 101 unresolved exceptions, ₹13,09,022 at stake
+  unsettled 69 · unknown_payment 12 · duplicate_payment 10 · amount_mismatch 10
+
+Actions requested 2,447 · allowed 1,320 · denied 1,081 · escalated 46
+Refusals: economics 919 · opt_out 80 · attempt_limit 39 · unretryable 37 ·
+          prompt_injection 31 · contact_frequency 12 · block_ceiling 7 · disputed 2
+Ledger: 6,101 entries, intact
+
+METHOD CHECK — measured ₹6,30,056 against ground truth ₹5,71,192, 10% off
 ```
 
-The economics gate is the single largest source of refusals, which is the point:
-it is the part nobody else builds.
+The economics gate is still the single largest source of refusals by a wide
+margin, which is the point: it is the part nobody else builds.
 
-**The number to be careful with.** "Attributable to chasing" is biased upward. A
-retry or escalation landing on an invoice that would have paid anyway is credited
-to chasing, because with no control group nothing can tell them apart. Day 4's
-holdout is what separates them. Do not put this figure in the pitch yet.
+**Read the interval, not the point estimate.** ₹6,30,056 is one draw of one
+month. The book supports an interval nearly as wide as the estimate, and on a
+500-invoice fixture the same estimator came out 88% off. It excludes zero, so
+the effect is real; the magnitude is not pinned down to the rupee and the
+scorecard says so. Quote the interval.
+
+**Two numbers that are honest and read badly:**
+
+- *Lost sales ₹0.* The block threshold (0.70) is deliberately conservative and
+  the month produced no false positive at it. That is not a free lunch — the
+  cost shows up in the next line instead, as ₹2,13,421 of fraud that got
+  through. `--block-threshold` prices the dial: lowering it to 0.45 makes things
+  *worse*, because the economics gate then refuses the extra blocks while the
+  flags that were catching fraud disappear into them.
+- *101 unresolved exceptions.* Most of them (69) are captured payments the bank
+  never settled. That is money the merchant is owed, found by a sweep no
+  batch-by-batch reconciler would do, and reported rather than resolved.
 
 **Not built yet, in plan order:**
 
 | Day | What |
 |---|---|
-| 4 | `agents/risk.py`, `agents/reconcile.py`, `harness/replay.py` (80/20 treated vs holdout — replaces the biased figure above), `harness/redteam.py` |
-| 5 | `web/` dashboard — scorecard, live decision feed, ledger viewer. Full 5,000-event run |
+| 5 | `web/` dashboard — scorecard, live decision feed, ledger viewer |
 | 6 | Demo video, architecture diagram, three pitch dry-runs |
 
 Submit **5 Sept**, early in the day.
@@ -379,10 +435,14 @@ Submit **5 Sept**, early in the day.
 
 - The Gemini planner has never round-tripped. The key in the sibling projects is
   malformed (50 chars, `Ab8R…`); a real AI Studio key is 39 and starts `AIza`.
-  Get a working key before day 4 rather than debugging it on day 5.
-- The risk and reconcile agents do not exist, so `AgentName.RISK` and
-  `AgentName.RECONCILE` are declared but unused, and the economics gate has no
-  opinion on `block_order` / `flag_for_review` (fraud-loss-vs-lost-sale is a
-  different calculation and is not modelled).
-- `needs_human` fires in batches now (8 last run) but the approval → resubmit
-  loop is only exercised by unit tests, never at batch scale.
+  This is now the largest single risk left: every number above comes from the
+  deterministic planner, and the LLM path is the one a judge will ask about.
+- The risk agent has no LLM variant at all. The `Scorer` protocol is there for
+  one, and the gateway already refuses inflated claims, so the interesting demo
+  (an LLM talked into blocking a competitor) is reachable — but not written.
+- No confidence interval on the *fraud* numbers. The uplift has one; prevented
+  and lost-sale are point counts over a few dozen events and are noisier than
+  they look.
+- The reconciler matches whole batches only. A real one nets partial refunds and
+  chargebacks against a settlement; this one would report those as mismatches.
+- `web/` is still an empty directory.
