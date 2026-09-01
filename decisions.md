@@ -648,3 +648,64 @@ Worth noting what the existing tests could not have caught: every seeded RNG in
 the harness was already deterministic *given its inputs*, and each was unit
 tested that way. The defect was in what was fed to one of them, which only a
 whole-run comparison could see.
+
+---
+
+## 2026-09-01 — The dashboard is one static file, served by the API process
+
+**Decision:** `web/index.html` — inline CSS and JS, no dependencies, no build
+step — served at `/` by the same FastAPI app that serves the JSON. The README's
+Next.js commitment is dropped and the stack line rewritten.
+
+**Why:** the dashboard is three read-only views over endpoints that already
+existed. A framework would have bought a build step, a second process on a
+second port, CORS configuration, and an `npm install` that can fail on the
+morning of the pitch — in exchange for nothing the page needed. Demo day is now
+one command:
+
+    CHECKPOST_DB=data/replay.db python -m uvicorn engine.api:app
+
+Nothing is fetched from a CDN either, and a test asserts it: a dashboard that
+needs the network to render is a dashboard that fails in a room with bad wifi.
+
+**The cost, stated plainly:** the README promised Next.js and no longer
+delivers it. If a judge asks why there is no frontend framework, the answer is
+the paragraph above, and it is a better answer than a framework would have been.
+
+**The scorecard is read, never computed.** A full replay takes about twenty
+seconds, so `harness.replay` writes `out/scorecard.json` and `/v1/scorecard`
+serves the file. That also fixes the relationship honestly: the dashboard is a
+view over a completed run, so every number on screen came from a command anyone
+can re-run and check.
+
+---
+
+## 2026-09-01 — The lint config keeps the checks that would catch a regression
+
+**Decision:** `.pylintrc`, with each disable carrying its reason. Everything
+pylint found that was an actual defect was **fixed**, not silenced: thirteen
+unused imports, five dead variables, twelve over-long lines, two mixed line
+endings, an f-string with nothing in it. The five one-off deliberate choices
+(`Exception_`, the API's module-level gateway singleton and its `global`, two
+deliberately broad excepts) carry inline disables at the site, so the rest of
+the codebase still gets naming and exception checks.
+
+**Why the workflow was failing:** the starter workflow GitHub adds through its
+web UI installs *only* pylint and then lints the whole tree, so every
+`import pydantic` and `import fastapi` came back `E0401 import-error`. It also
+ran a 3.8/3.9/3.10 matrix against a codebase that requires 3.12. Both are fixed;
+the lint now runs on 3.12 with the project's own dependencies installed.
+
+**What stays enabled, and why it matters:** `missing-module-docstring`. This
+project's documentation lives at module level — every module opens with an essay
+on what it refuses to do — so enforcing that one is meaningful, while
+`missing-function-docstring` on a suite whose test names are full sentences is
+not.
+
+A second workflow runs the 203 tests and the red team on every push. The red
+team is a gate that exits non-zero, so an attack getting through fails the build
+rather than appearing in a log nobody reads.
+
+**Watch out for:** appending to a file with a shell heredoc writes LF into files
+that are otherwise CRLF, and pylint's `mixed-line-endings` catches it. It caught
+this twice in one session.

@@ -127,7 +127,7 @@ class RulePlanner:
             return (
                 ActionType.ESCALATE_TO_HUMAN,
                 0,
-                f"invoice is too small to justify a call; handing it to a human to close out",
+                "invoice is too small to justify a call; handing it to a human to close out",
             )
 
         days = (now - invoice.due_at).days
@@ -255,7 +255,8 @@ class GeminiPlanner:
                         int(args.get("amount_paise") or 0),
                         str(args.get("rationale", ""))[:400],
                     )
-        except Exception as exc:  # noqa: BLE001 — a planner must never take the run down
+        # A planner must never take the run down, whatever the SDK raises.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             print(f"  [gemini unavailable: {type(exc).__name__}: {exc}] falling back to rules")
 
         return self._fallback.plan(invoice, payments, tried, now)
@@ -268,7 +269,8 @@ def build_planner() -> Planner:
         return RulePlanner()
     try:
         return GeminiPlanner()
-    except Exception as exc:  # noqa: BLE001
+    # Same reasoning: a missing or broken key falls back, it does not crash.
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"  [gemini planner unavailable: {exc}] using rules")
         return RulePlanner()
 

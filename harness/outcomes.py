@@ -141,7 +141,8 @@ class OutcomeSimulator:
             return self._nothing(req, now, OutcomeResult.FAILED)
 
         if req.action is ActionType.ESCALATE_TO_HUMAN:
-            if will_pay_eventually and self._rng(invoice_id, "esc").random() < ESCALATION_CLOSE_RATE:
+            landed = self._rng(invoice_id, "esc").random() < ESCALATION_CLOSE_RATE
+            if will_pay_eventually and landed:
                 return self._settle(req, invoice, now, OutcomeResult.RECOVERED)
             return self._nothing(req, now, OutcomeResult.NO_RESPONSE)
 

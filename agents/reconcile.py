@@ -59,7 +59,7 @@ UNSETTLED_AFTER = timedelta(days=3)
 
 
 @dataclass(frozen=True)
-class Exception_:
+class Exception_:  # pylint: disable=invalid-name
     """One thing the reconciler could not resolve.
 
     Named ``Exception_`` because it is emphatically not a Python exception: it

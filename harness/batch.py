@@ -18,7 +18,6 @@ The shape of a run:
 from __future__ import annotations
 
 import argparse
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,7 +25,7 @@ from agents.recovery import RecoveryAgent, RulePlanner, build_planner
 from engine.console import setup_console
 from engine.gateway import Gateway
 from engine.ledger import Ledger
-from engine.schema import Verdict, fmt
+from engine.schema import fmt
 from engine.store import DataStore
 from harness.outcomes import OutcomeSimulator
 

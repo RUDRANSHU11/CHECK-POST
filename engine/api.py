@@ -6,15 +6,23 @@ add nothing but latency and a second failure mode. So the class holds the logic
 and this module is a thin translation layer: parse, call, serialise.
 
 Run it with:  python -m uvicorn engine.api:app --reload
+
+Serves the dashboard at ``/`` as well as the JSON API. One process, no build
+step: the page is a single static file in ``web/`` that fetches these same
+endpoints. Point the server at a run you want to look at::
+
+    CHECKPOST_DB=data/replay.db python -m uvicorn engine.api:app
 """
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from engine import policy
@@ -23,7 +31,13 @@ from engine.ledger import Ledger
 from engine.schema import ActionRequest, Decision, Outcome
 from engine.store import DataStore
 
-_gateway: Gateway | None = None
+# Not a constant — a singleton the lifespan hook publishes once at startup.
+_gateway: Gateway | None = None  # pylint: disable=invalid-name
+
+
+#: The dashboard, and the file the harness writes for it to read.
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+SCORECARD_PATH = Path(os.getenv("CHECKPOST_SCORECARD", "out/scorecard.json"))
 
 
 def get_gateway() -> Gateway:
@@ -38,7 +52,7 @@ async def lifespan(app: FastAPI):
     # at a temp directory by a test without reimporting the module, and a server
     # whose data location is fixed the moment Python parses the file is awkward
     # to run twice on one machine.
-    global _gateway
+    global _gateway  # pylint: disable=global-statement
     dataset_path = os.getenv("CHECKPOST_DATASET", "data/dataset.json")
     db_path = os.getenv("CHECKPOST_DB", "data/checkpost.db")
     if not Path(dataset_path).exists():
@@ -65,9 +79,40 @@ class ApprovalIn(BaseModel):
     note: str = ""
 
 
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def dashboard() -> FileResponse:
+    """The dashboard. A single static file, served by the same process.
+
+    No build step and no second server: the page fetches the endpoints below
+    directly, so there is one thing to start on demo day and one thing that can
+    fail to start.
+    """
+    page = WEB_DIR / "index.html"
+    if not page.exists():
+        raise HTTPException(404, f"{page} missing")
+    return FileResponse(page, media_type="text/html")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "policy_version": policy.POLICY_VERSION}
+
+
+@app.get("/v1/scorecard")
+def scorecard() -> dict:
+    """The most recent replay's numbers.
+
+    Read from a file the harness wrote, never computed here: a full replay takes
+    twenty seconds, which is not a thing to do inside a web request. The
+    dashboard is a view over a completed run, which also means every number it
+    shows came from a command anyone can re-run.
+    """
+    if not SCORECARD_PATH.exists():
+        raise HTTPException(
+            404,
+            f"{SCORECARD_PATH} missing — run 'python -m harness.replay' to produce it",
+        )
+    return json.loads(SCORECARD_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/v1/actions", response_model=Decision)

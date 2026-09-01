@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -347,6 +348,42 @@ def run(
 
 
 # --------------------------------------------------------------------------- #
+# Handing the scorecard to something other than a terminal
+# --------------------------------------------------------------------------- #
+
+#: Keys that cannot cross a JSON boundary: an open SQLite handle and a dataclass.
+#: Everything else in the result is already a number, a string or a dict.
+_NOT_SERIALISABLE = ("ledger", "verify")
+
+
+def to_json(result: dict) -> dict:
+    """The scorecard as data, for the dashboard.
+
+    A run takes twenty seconds over the full month, which is far too long to do
+    inside a web request — so the harness writes the answer once and the server
+    reads the file. The dashboard is a view over a completed run, not a trigger
+    for one, and that is the honest relationship: the numbers on screen came
+    from a command someone can re-run and check.
+    """
+    payload = {k: v for k, v in result.items() if k not in _NOT_SERIALISABLE}
+    verify = result.get("verify")
+    payload["verify"] = {
+        "ok": bool(verify.ok),
+        "entries_checked": verify.entries_checked,
+        "detail": verify.detail or str(verify),
+    }
+    payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+    return payload
+
+
+def write_json(result: dict, path: str | Path) -> Path:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(to_json(result), indent=2), encoding="utf-8")
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # The scorecard
 # --------------------------------------------------------------------------- #
 
@@ -517,6 +554,11 @@ def main() -> None:
     )
     ap.add_argument("--db", default="data/replay.db")
     ap.add_argument(
+        "--out",
+        default="out/scorecard.json",
+        help="where to write the scorecard as JSON for the dashboard",
+    )
+    ap.add_argument(
         "--llm",
         action="store_true",
         help="use the Gemini planner for recovery (needs GEMINI_API_KEY)",
@@ -532,6 +574,8 @@ def main() -> None:
         use_llm=args.llm,
     )
     print(render(result))
+    written = write_json(result, args.out)
+    print(f"scorecard written to {written}")
     result["ledger"].close()
 
 

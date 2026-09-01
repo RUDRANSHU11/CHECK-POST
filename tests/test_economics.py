@@ -6,8 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from engine import economics
-from engine.economics import MARGIN, MAX_SPEND_FRACTION, assess, probability
+from engine.economics import MAX_SPEND_FRACTION, assess, probability
 from engine.policy import PolicyContext
 from engine.schema import ActionRequest, ActionType, AgentName, Verdict, rupees
 from tests.conftest import NOON_IST
@@ -69,7 +68,10 @@ def test_repeated_attempts_eventually_stop_being_worth_it(store):
 
 
 def test_probability_decays_monotonically(store):
-    ps = [probability(req(ActionType.SEND_SMS), ctx(store, attempts_on_invoice=n)) for n in range(6)]
+    ps = [
+        probability(req(ActionType.SEND_SMS), ctx(store, attempts_on_invoice=n))
+        for n in range(6)
+    ]
     assert ps == sorted(ps, reverse=True)
     assert all(0.0 <= p <= 1.0 for p in ps)
 
@@ -132,7 +134,10 @@ def test_gate_has_no_opinion_on_non_recovery_actions(store, action):
 
 
 def test_gate_has_no_opinion_without_an_invoice(store):
-    a = assess(req(ActionType.SEND_SMS), PolicyContext(now=NOON_IST, customer=store.customer("c_ok")))
+    a = assess(
+        req(ActionType.SEND_SMS),
+        PolicyContext(now=NOON_IST, customer=store.customer("c_ok")),
+    )
     assert a.applicable is False
 
 

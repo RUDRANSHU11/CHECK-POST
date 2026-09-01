@@ -41,7 +41,6 @@ from datetime import datetime
 from engine.policy import PolicyContext
 from engine.schema import (
     ACTION_COST_PAISE,
-    CONTACT_ACTIONS,
     RISK_ACTIONS,
     ActionRequest,
     ActionType,
@@ -291,7 +290,11 @@ def assess(req: ActionRequest, ctx: PolicyContext) -> Assessment:
     cost = cost_of(req)
 
     # A discount only recovers what is left after the discount.
-    recoverable = outstanding - req.amount_paise if req.action is ActionType.OFFER_DISCOUNT else outstanding
+    recoverable = (
+        outstanding - req.amount_paise
+        if req.action is ActionType.OFFER_DISCOUNT
+        else outstanding
+    )
     expected = int(p * recoverable)
 
     a = Assessment(

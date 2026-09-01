@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 
 import pytest
 
@@ -63,7 +62,7 @@ def test_opt_out_blocks_every_contact_channel(store):
 
 
 def test_opt_out_does_not_block_non_contact_actions(store):
-    v, rs = decide(
+    _, rs = decide(
         req(ActionType.WRITE_OFF, customer_id="c_stop", invoice_id="i_stop"),
         ctx(store, customer=store.customer("c_stop"), invoice=store.invoice("i_stop")),
     )
@@ -106,7 +105,7 @@ def test_quiet_hours_exempts_email(store):
 # -- r04 refund ceiling ---------------------------------------------------- #
 
 def test_large_refund_needs_a_human(store):
-    v, rs = decide(
+    v, _ = decide(
         req(ActionType.ISSUE_REFUND, payment_id="p_expired",
             amount_paise=REFUND_HUMAN_THRESHOLD_PAISE + 1),
         ctx(store, payment=store.payment("p_expired")),
@@ -338,8 +337,6 @@ def test_a_clean_list_of_signals_is_not_flagged(store):
 # -- r16 settlement discrepancy -------------------------------------------- #
 
 def test_a_settlement_that_reconciles_to_the_rupee_is_allowed(store):
-    from engine.schema import Settlement
-
     settlement = store.settlement("s_ok")
     req = ActionRequest(
         request_id="rq",

@@ -31,7 +31,7 @@ the layer is general. The depth is in the layer, not in them.
 | SQLite | the ledger, `data/checkpost.db` | zero setup, and its triggers enforce append-only at the storage layer |
 | pytest | `tests/` | 127 tests, all green |
 | google-genai 2.20 | `agents/recovery.py` | LLM planner. Written, **never run** — no valid key on this machine |
-| Next.js | `web/` | dashboard — **not started**, Day 5 |
+| one static HTML file | `web/index.html` | dashboard, served by the API process itself. No build step and no CDN: a page that needs a toolchain or the network to render is a page that fails on demo day |
 
 Dependencies are pinned loosely in `requirements.txt` and installed into `.venv`.
 
@@ -61,12 +61,12 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  198 tests
+├── tests/                  203 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
 │   └── checkpost.db        the ledger
-├── web/                    NOT WRITTEN YET — Day 5
+├── web/index.html          the dashboard — scorecard, feed, ledger
 ├── decisions.md            why things are the way they are
 └── flow.md                 this file
 ```
@@ -339,8 +339,13 @@ cd C:\Users\rudra\checkpost
 # the flattering one and it says so.
 .venv\Scripts\python.exe -m harness.batch --limit 400 --days 5
 
-# serve — docs at http://127.0.0.1:8000/docs
+# serve — dashboard at http://127.0.0.1:8000/, API docs at /docs
+# CHECKPOST_DB picks which run the feed and ledger views show.
+set CHECKPOST_DB=data/replay.db
 .venv\Scripts\python.exe -m uvicorn engine.api:app --reload
+
+# lint, with every disable justified in .pylintrc
+.venv\Scripts\python.exe -m pylint $(git ls-files '*.py')
 
 # check the log has not been rewritten
 .venv\Scripts\python.exe -m engine.ledger verify
@@ -358,7 +363,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (198 tests green, red team 18/18):**
+**Working, tested (203 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
@@ -376,6 +381,10 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 - Reconciler with four named exception classes and an unsettled sweep
 - Replay harness: 80/20 treated vs holdout, bootstrap confidence interval
 - Red team: 18 attacks, each asserted against the rule that must stop it
+- Dashboard at `/` — scorecard, live decision feed, ledger viewer. One static
+  file served by the API process; the feed polls, so an action submitted
+  through `/docs` during a demo appears as it is judged
+- CI on every push: pylint, the test suite, and the red team as a gate
 
 **Last full replay** — every collectable invoice, 31 simulated days:
 
@@ -426,7 +435,6 @@ scorecard says so. Quote the interval.
 
 | Day | What |
 |---|---|
-| 5 | `web/` dashboard — scorecard, live decision feed, ledger viewer |
 | 6 | Demo video, architecture diagram, three pitch dry-runs |
 
 Submit **5 Sept**, early in the day.
@@ -445,4 +453,7 @@ Submit **5 Sept**, early in the day.
   they look.
 - The reconciler matches whole batches only. A real one nets partial refunds and
   chargebacks against a settlement; this one would report those as mismatches.
-- `web/` is still an empty directory.
+- The dashboard reads a completed run. It cannot start one, and there is no
+  button to. That is the honest relationship, but it does mean a stale
+  `out/scorecard.json` will be shown without complaint if nobody re-runs the
+  replay — the page prints the run's timestamp so the staleness is visible.

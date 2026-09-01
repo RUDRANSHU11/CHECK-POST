@@ -545,9 +545,12 @@ def summarise(dataset: dict, truth: dict) -> str:
     lines = [
         f"batch          {dataset['batch_id']}  (seed {dataset['seed']})",
         f"customers      {len(dataset['customers']):,}   opted out: {opted:,}",
-        f"invoices       {len(invs):,}   " + "  ".join(f"{k}={v:,}" for k, v in sorted(by_status.items())),
-        f"payments       {len(pays):,}   " + "  ".join(f"{k}={v:,}" for k, v in sorted(by_failure.items())),
-        f"settlements    {len(stls):,}   " + "  ".join(f"{k}={v:,}" for k, v in sorted(by_exception.items())),
+        f"invoices       {len(invs):,}   "
+        + "  ".join(f"{k}={v:,}" for k, v in sorted(by_status.items())),
+        f"payments       {len(pays):,}   "
+        + "  ".join(f"{k}={v:,}" for k, v in sorted(by_failure.items())),
+        f"settlements    {len(stls):,}   "
+        + "  ".join(f"{k}={v:,}" for k, v in sorted(by_exception.items())),
         f"outstanding    {fmt(outstanding)}",
         "",
         "ground truth (never shown to an agent)",

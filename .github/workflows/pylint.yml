@@ -1,23 +1,32 @@
 name: Pylint
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
-  build:
+  pylint:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.8", "3.9", "3.10"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pylint
-    - name: Analysing the code with pylint
-      run: |
-        pylint $(git ls-files '*.py')
+      - uses: actions/checkout@v4
+
+      # The project targets 3.12. The original matrix ran 3.8/3.9/3.10, none of
+      # which this codebase supports — it uses PEP 604 unions and builtin
+      # generics that pydantic resolves at class-creation time.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Without the project's own dependencies installed, pylint cannot resolve
+      # `import pydantic` or `import fastapi` and reports E0401 for every one of
+      # them. That was the original workflow's actual failure: it installed only
+      # pylint, so every third-party import looked broken.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install 'pylint~=4.0'
+
+      # Configuration lives in .pylintrc, where each disable records why.
+      # Pylint exits non-zero on any message, so there is no score to drift under.
+      - name: Analysing the code with pylint
+        run: pylint $(git ls-files '*.py')

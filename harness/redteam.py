@@ -629,7 +629,7 @@ def run(db_path: str | Path = "data/redteam.db") -> list[Result]:
     """
     path = Path(db_path)
     results = []
-    for n, c in enumerate(CASES):
+    for c in CASES:
         if path.exists():
             path.unlink()
         store = build_world()
