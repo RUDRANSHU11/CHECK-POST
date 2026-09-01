@@ -1,0 +1,85 @@
+# Pylint configuration.
+#
+# The disables below are deliberate, and each one says why. A lint config that
+# is all disables is worth nothing, so the rule applied here is: anything that
+# would catch a real regression stays on, and anything that fights a documented
+# choice in `flow.md` gets turned off *with its reason recorded next to it*.
+#
+# Everything pylint found that was an actual defect — unused imports, dead
+# variables, over-long lines, a mixed line ending, an f-string with nothing in
+# it — was fixed rather than silenced. The five one-off deliberate choices
+# (a class named `Exception_`, the API's module-level gateway singleton, two
+# deliberately broad excepts) carry inline disables at the site, so the rest of
+# the codebase still gets naming and exception checks.
+
+[MAIN]
+# The project targets 3.12. The union syntax and builtin generics used
+# throughout are not valid on older interpreters.
+py-version = 3.12
+
+[MESSAGES CONTROL]
+disable =
+    # -- documentation ----------------------------------------------------- #
+    # This codebase documents at module and class level, heavily and on
+    # purpose: every module opens with an essay on what it is for and what it
+    # refuses to do. Individual helpers like `store.customer(cid)` are named
+    # well enough that a docstring would restate the signature. In `tests/`,
+    # the function *name* is the documentation — `test_the_model_cannot_see_
+    # the_future` says more than a docstring would. `missing-module-docstring`
+    # stays ENABLED, because that is where this project's documentation lives
+    # and enforcing it is meaningful.
+    missing-function-docstring,
+    missing-class-docstring,
+
+    # -- pytest idiom ------------------------------------------------------ #
+    # A test taking a fixture named `store` shadows the module-level fixture
+    # function of the same name. That is how pytest works; there is no way to
+    # write a fixture-based suite without it.
+    redefined-outer-name,
+    # Fixtures requested purely for their side effects (`always_settles`,
+    # `tmp_path`) are arguments a test never references by name. Same for
+    # framework callbacks whose signature is fixed by the framework.
+    unused-argument,
+    # Tests reach into `store._settlements_by_payment` to simulate a book with
+    # no settlements. Deliberate: the alternative is a public mutator that
+    # exists only for tests.
+    protected-access,
+    # Fixtures across test modules build similar Customer/Invoice objects. The
+    # duplication is what makes each file readable on its own.
+    duplicate-code,
+    # `assert [e.kind for e in agent.exceptions] == []` states the expected
+    # value; `assert not [...]` states a truthiness. In an assertion the first
+    # is clearer about what failed.
+    use-implicit-booleaness-not-comparison,
+
+    # -- deliberate structure ---------------------------------------------- #
+    # Optional and deferred imports are a design choice, documented at each
+    # site: `from google import genai` inside `GeminiPlanner.__init__` so the
+    # module loads without the dependency installed, and `setup_console()`
+    # inside `main()` so importing a harness module has no console side effect.
+    import-outside-toplevel,
+    # `dict(...)` followed by `base.update(over)` is the fixture-builder
+    # pattern used across the tests and the red team. A literal cannot be
+    # updated the same way without an extra name.
+    use-dict-literal,
+    # Dataclasses and Protocols carrying state rather than behaviour.
+    too-few-public-methods,
+    # The domain is wide, not deep: `PolicyContext` has a field per fact a rule
+    # may consult, and `generate()` builds five populations in one pass. The
+    # right response is a comment explaining the shape, which those have.
+    too-many-locals,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-instance-attributes,
+    too-many-branches,
+    too-many-statements,
+    too-many-return-statements,
+
+[FORMAT]
+# The default. The codebase now complies rather than the limit being raised to
+# meet it.
+max-line-length = 100
+
+[REPORTS]
+# Any message at all fails the build. There is no score floor to drift under.
+score = no

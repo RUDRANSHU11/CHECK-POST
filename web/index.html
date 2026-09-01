@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpost</title>
+<style>
+/* ---------------------------------------------------------------------------
+   One file, no build step, no dependencies.
+
+   The dashboard is served by the same FastAPI process as the API it reads, so
+   demo day is one command and one thing that can fail to start. Nothing here is
+   fetched from a CDN either: a dashboard that needs the network to render is a
+   dashboard that fails in a room with bad wifi.
+
+   Colours are roles, not hex, so the dark theme swaps in one place. The values
+   come from a validated palette: one sequential hue for magnitude, a gray for
+   de-emphasis, and a fixed status palette for verdicts. Every verdict carries
+   its word as well as its colour — on a light surface the warning step sits
+   below 3:1 by design, and the text is the mitigation.
+--------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --plane:        #f9f9f7;
+  --surface:      #fcfcfb;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --muted:        #898781;
+  --grid:         #e1e0d9;
+  --axis:         #c3c2b7;
+  --ring:         rgba(11,11,11,0.10);
+
+  --accent:       #2a78d6;   /* sequential blue, the magnitude hue */
+  --accent-soft:  #cde2fb;
+  --deemph:       #c3c2b7;   /* the context half of an emphasis pair */
+
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --critical:     #d03b3b;
+  --good-ink:     #006300;
+  --warn-ink:     #6b4a00;
+  --crit-ink:     #a02020;
+  --good-wash:    #e8f6e8;
+  --warn-wash:    #fdf3dd;
+  --crit-wash:    #fbeaea;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:      #0d0d0d;
+    --surface:    #1a1a19;
+    --ink:        #ffffff;
+    --ink-2:      #c3c2b7;
+    --muted:      #898781;
+    --grid:       #2c2c2a;
+    --axis:       #383835;
+    --ring:       rgba(255,255,255,0.10);
+
+    --accent:     #3987e5;
+    --accent-soft:#184f95;
+    --deemph:     #52514e;
+
+    --good-ink:   #0ca30c;
+    --warn-ink:   #fab219;
+    --crit-ink:   #e66767;
+    --good-wash:  #142614;
+    --warn-wash:  #2b2412;
+    --crit-wash:  #2c1616;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+  --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+  --ring: rgba(255,255,255,0.10);
+  --accent: #3987e5; --accent-soft: #184f95; --deemph: #52514e;
+  --good-ink: #0ca30c; --warn-ink: #fab219; --crit-ink: #e66767;
+  --good-wash: #142614; --warn-wash: #2b2412; --crit-wash: #2c1616;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--plane);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+[hidden] { display: none !important; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px 64px; }
+
+/* -- header ---------------------------------------------------------- */
+header {
+  border-bottom: 1px solid var(--grid);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 5;
+}
+.head-in {
+  max-width: 1180px; margin: 0 auto; padding: 14px 20px;
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+.brand { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.brand span { color: var(--muted); font-weight: 400; }
+.head-meta { color: var(--muted); font-size: 12.5px; display: flex; gap: 14px; flex-wrap: wrap; }
+.head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+nav { display: flex; gap: 2px; max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+nav button {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  font: inherit; color: var(--ink-2); padding: 9px 14px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+nav button:hover { color: var(--ink); }
+nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+
+.ghost {
+  appearance: none; font: inherit; cursor: pointer;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px;
+}
+.ghost:hover { color: var(--ink); }
+
+/* -- cards ----------------------------------------------------------- */
+.card {
+  background: var(--surface); border: 1px solid var(--ring);
+  border-radius: 10px; padding: 20px 22px; margin-top: 18px;
+}
+.card > h2 {
+  margin: 0 0 4px; font-size: 12px; font-weight: 650;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+}
+.card > .sub { margin: 0 0 18px; color: var(--ink-2); font-size: 13px; max-width: 68ch; }
+
+/* -- hero ------------------------------------------------------------ */
+.hero-val {
+  font-size: 52px; line-height: 1.05; font-weight: 660;
+  letter-spacing: -0.025em; margin: 6px 0 2px;
+}
+.hero-label { color: var(--muted); font-size: 12.5px; }
+
+/* The interval track. The point estimate is a tick inside the range, not a
+   bar from zero — the number is a location with uncertainty, and drawing it
+   as a bar would imply a magnitude read from the axis. */
+.ci { margin: 22px 0 6px; }
+.ci-track {
+  position: relative; height: 34px;
+  border-left: 1px solid var(--axis); border-right: 1px solid var(--axis);
+}
+.ci-rule { position: absolute; left: 0; right: 0; top: 16px; border-top: 1px solid var(--grid); }
+.ci-range {
+  position: absolute; top: 11px; height: 10px; border-radius: 4px;
+  background: var(--accent-soft);
+}
+.ci-point { position: absolute; top: 4px; width: 2px; height: 24px; background: var(--accent); }
+.ci-zero { position: absolute; top: 0; width: 1px; height: 34px; background: var(--critical); }
+.ci-ends {
+  display: flex; justify-content: space-between;
+  color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.ci-note { margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+
+/* -- kpi row --------------------------------------------------------- */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 1px; background: var(--grid); border: 1px solid var(--grid); border-radius: 8px; overflow: hidden; }
+.kpi { background: var(--surface); padding: 14px 16px; }
+.kpi .k { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 21px; font-weight: 620; letter-spacing: -0.015em; margin-top: 3px; }
+.kpi .n { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.v.pos { color: var(--good-ink); }
+.v.neg { color: var(--crit-ink); }
+
+/* -- bars ------------------------------------------------------------ */
+.bars { display: grid; gap: 8px; }
+.bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr auto; gap: 12px; align-items: center; }
+.bar-label { color: var(--ink-2); font-size: 13px; }
+.bar-track { background: var(--grid); border-radius: 4px; height: 14px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--accent); }
+.bar-fill.ctx { background: var(--deemph); }
+.bar-val { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); min-width: 8ch; text-align: right; }
+
+/* -- tables ---------------------------------------------------------- */
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 8px 12px; border-bottom: 1px solid var(--grid); white-space: nowrap;
+}
+td { padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+tbody tr:hover { background: var(--plane); }
+.reason { color: var(--ink-2); max-width: 62ch; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+/* -- badges ---------------------------------------------------------- */
+/* The word is always present. On a light surface the warning step is below
+   3:1, so colour never carries the meaning by itself. */
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 620; letter-spacing: 0.02em; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge.allow  { background: var(--good-wash); color: var(--good-ink); border-color: var(--good); }
+.badge.deny   { background: var(--crit-wash); color: var(--crit-ink); border-color: var(--critical); }
+.badge.human  { background: var(--warn-wash); color: var(--warn-ink); border-color: var(--warning); }
+.badge.plain  { background: var(--plane); color: var(--ink-2); border-color: var(--ring); }
+
+.filters { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.filters .spacer { margin-left: auto; }
+.chip {
+  appearance: none; font: inherit; font-size: 12.5px; cursor: pointer;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--ring); border-radius: 999px; padding: 4px 12px;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.note {
+  border-left: 2px solid var(--axis); padding: 2px 0 2px 14px;
+  color: var(--ink-2); font-size: 13px; max-width: 74ch;
+}
+.empty { color: var(--muted); padding: 28px 0; }
+.empty code {
+  display: inline-block; margin-top: 8px; padding: 6px 10px;
+  background: var(--plane); border: 1px solid var(--ring); border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+  color: var(--ink);
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 820px) { .grid-2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-in">
+    <div class="brand">Checkpost <span>· decision layer</span></div>
+    <div class="head-meta">
+      <span id="m-batch">—</span>
+      <span id="m-policy">—</span>
+    </div>
+    <div class="head-right">
+      <span id="m-ledger" class="badge plain">ledger —</span>
+      <button class="ghost" id="theme-toggle" title="Switch theme">Theme</button>
+    </div>
+  </div>
+  <nav role="tablist">
+    <button role="tab" aria-selected="true"  data-panel="p-score">Scorecard</button>
+    <button role="tab" aria-selected="false" data-panel="p-feed">Decisions</button>
+    <button role="tab" aria-selected="false" data-panel="p-ledger">Ledger</button>
+  </nav>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= SCORECARD ================= -->
+  <section id="p-score">
+    <div id="score-body"></div>
+  </section>
+
+  <!-- ================= DECISION FEED ================= -->
+  <section id="p-feed" hidden>
+    <div class="card">
+      <h2>Live decision feed</h2>
+      <p class="sub">
+        Every request an agent made and what the layer said back. Refusals carry the
+        rule that objected, in the words it was written in — the reason is the product,
+        not a code.
+      </p>
+      <div class="filters">
+        <button class="chip" data-filter="all" aria-pressed="true">All</button>
+        <button class="chip" data-filter="deny" aria-pressed="false">Denied</button>
+        <button class="chip" data-filter="needs_human" aria-pressed="false">Escalated</button>
+        <button class="chip" data-filter="allow" aria-pressed="false">Allowed</button>
+        <span class="spacer"></span>
+        <label style="font-size:12.5px;color:var(--ink-2)">
+          <input type="checkbox" id="auto" checked> auto-refresh
+        </label>
+        <button class="ghost" id="refresh">Refresh</button>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Agent</th><th>Action</th><th>Verdict</th>
+            <th>Why</th><th class="num">Amount</th>
+          </tr></thead>
+          <tbody id="feed-rows"></tbody>
+        </table>
+      </div>
+      <div id="feed-empty" class="empty" hidden></div>
+    </div>
+  </section>
+
+  <!-- ================= LEDGER ================= -->
+  <section id="p-ledger" hidden>
+    <div class="card">
+      <h2>Tamper-evident ledger</h2>
+      <p class="sub">
+        Each entry carries the hash of the one before it. Change an old entry and every
+        hash after it stops matching, visibly. The head below commits to the whole
+        history: anyone can re-run <span class="mono">python -m engine.ledger verify</span>
+        and get the same value, or not.
+      </p>
+      <div id="verify-box"></div>
+      <div class="scroll" style="margin-top:16px">
+        <table>
+          <thead><tr>
+            <th>Seq</th><th>Type</th><th>Recorded</th><th>Previous hash</th><th>Entry hash</th>
+          </tr></thead>
+          <tbody id="ledger-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Formatting. Money crosses the wire as integer paise, exactly as it is held
+   everywhere else in the system, and is only ever turned into rupees here at
+   the edge — same rule the Python side follows.
+--------------------------------------------------------------------------- */
+const inr = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const int = new Intl.NumberFormat("en-IN");
+
+function money(paise, opts = {}) {
+  if (paise === null || paise === undefined) return "—";
+  const sign = paise < 0 ? "-" : "";
+  const s = inr.format(Math.abs(paise) / 100);
+  return `${sign}₹ ${opts.short ? s.replace(/\.00$/, "") : s}`;
+}
+const count = (n) => (n === null || n === undefined ? "—" : int.format(n));
+const el = (id) => document.getElementById(id);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw Object.assign(new Error(`${r.status}`), { status: r.status });
+  return r.json();
+}
+
+/* ---------------------------------------------------------------------------
+   Tabs
+--------------------------------------------------------------------------- */
+const PANELS = ["p-score", "p-feed", "p-ledger"];
+document.querySelectorAll('nav button').forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll('nav button').forEach((o) =>
+      o.setAttribute("aria-selected", String(o === b)));
+    PANELS.forEach((p) => { el(p).hidden = p !== b.dataset.panel; });
+  });
+});
+
+el("theme-toggle").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.getAttribute("data-theme") === "dark"
+    || (!root.getAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
+  root.setAttribute("data-theme", dark ? "light" : "dark");
+});
+
+/* ---------------------------------------------------------------------------
+   Bars. Plain HTML rather than SVG: these are one-dimensional magnitudes and a
+   div with a width is both responsive and readable in the DOM.
+--------------------------------------------------------------------------- */
+function bars(rows, { max, format = count, context = () => false } = {}) {
+  const top = max ?? Math.max(1, ...rows.map((r) => r.value));
+  return `<div class="bars">${rows.map((r) => `
+    <div class="bar-row">
+      <div class="bar-label">${esc(r.label)}</div>
+      <div class="bar-track">
+        <div class="bar-fill${context(r) ? " ctx" : ""}" style="width:${Math.max(0.6, (r.value / top) * 100)}%"></div>
+      </div>
+      <div class="bar-val">${format(r.value)}</div>
+    </div>`).join("")}</div>`;
+}
+
+/* ---------------------------------------------------------------------------
+   The scorecard
+--------------------------------------------------------------------------- */
+function intervalTrack(low, point, high) {
+  // Pad the axis so the interval never touches the ends, and always include
+  // zero in view — whether the interval clears zero is the single thing a
+  // reader needs to be able to see.
+  const lo = Math.min(0, low), hi = Math.max(0, high);
+  const pad = (hi - lo) * 0.08 || 1;
+  const a = lo - pad, b = hi + pad;
+  const pos = (v) => ((v - a) / (b - a)) * 100;
+  const crossesZero = low <= 0;
+
+  return `
+    <div class="ci">
+      <div class="ci-track">
+        <div class="ci-rule"></div>
+        <div class="ci-range" style="left:${pos(low)}%;width:${Math.max(0.5, pos(high) - pos(low))}%"></div>
+        <div class="ci-point" style="left:${pos(point)}%"></div>
+        <div class="ci-zero" style="left:${pos(0)}%" title="zero"></div>
+      </div>
+      <div class="ci-ends">
+        <span>${money(low, { short: true })}</span>
+        <span>95% confidence interval</span>
+        <span>${money(high, { short: true })}</span>
+      </div>
+      <p class="ci-note">
+        ${crossesZero
+          ? "The interval crosses zero (the red line), so this run did not establish an effect. That is the honest reading, not a smaller positive number."
+          : "The interval clears zero (the red line), so the effect is real. Quote the interval, not the point estimate — this is one draw of one month."}
+      </p>
+    </div>`;
+}
+
+function renderScorecard(d) {
+  const spend = d.stats.spend_paise;
+  const net = d.uplift_measured_paise + d.prevented_paise - spend - d.lost_sale_paise;
+  const scale = d.book_holdout_paise ? d.book_treated_paise / d.book_holdout_paise : 0;
+
+  const denials = Object.entries(d.denials || {}).map(([label, value]) => ({ label, value }));
+  const exceptions = Object.entries(d.exceptions || {}).map(([label, value]) => ({ label, value }));
+
+  el("score-body").innerHTML = `
+    <div class="card">
+      <h2>Recovery, measured against a holdout</h2>
+      <p class="sub">
+        80% of the book was worked by the agent. The other 20% was deliberately left
+        alone. Money still arrives in a group nobody chased — so the difference between
+        the two, scaled for size, is the only part the agent can claim.
+      </p>
+      <div class="hero-label">Uplift the agent caused</div>
+      <div class="hero-val">${money(d.uplift_measured_paise)}</div>
+      ${intervalTrack(d.uplift_ci_low_paise, d.uplift_measured_paise, d.uplift_ci_high_paise)}
+
+      <div style="margin-top:26px">
+        ${bars(
+          [
+            { label: "Treated · recovered", value: d.recovered_treated_paise },
+            { label: "Holdout · scaled", value: d.holdout_scaled_paise, ctx: true },
+          ],
+          { format: (v) => money(v, { short: true }), context: (r) => r.ctx }
+        )}
+      </div>
+      <p class="note" style="margin-top:14px">
+        ${count(d.treated_invoices)} invoices treated (${money(d.book_treated_paise, { short: true })} of book)
+        against ${count(d.holdout_invoices)} held out (${money(d.book_holdout_paise, { short: true })}),
+        so the holdout's ${money(d.recovered_holdout_paise, { short: true })} scales by ×${scale.toFixed(2)}.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>The bottom line</h2>
+      <p class="sub">
+        Both directions. A layer that reported only what it saved would be the thing
+        this project was built to refuse.
+      </p>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Uplift from recovery</div><div class="v pos">${money(d.uplift_measured_paise, { short: true })}</div></div>
+        <div class="kpi"><div class="k">Fraud prevented</div><div class="v pos">${money(d.prevented_paise, { short: true })}</div>
+          <div class="n">${count(d.blocked_fraud)} blocked · ${count(d.reviewed_fraud)} caught in review</div></div>
+        <div class="kpi"><div class="k">Cost of interventions</div><div class="v neg">${money(-spend, { short: true })}</div></div>
+        <div class="kpi"><div class="k">Lost sales · blocked genuine</div><div class="v ${d.lost_sale_paise ? "neg" : ""}">${money(-d.lost_sale_paise, { short: true })}</div>
+          <div class="n">${count(d.blocked_genuine)} customers turned away</div></div>
+        <div class="kpi"><div class="k">Net value created</div><div class="v ${net >= 0 ? "pos" : "neg"}">${money(net, { short: true })}</div></div>
+      </div>
+      <p class="note" style="margin-top:16px">
+        Not in that total: ${money(d.missed_fraud_paise, { short: true })} of fraud got through
+        (${count(d.missed_fraud_count)} payments). Blocking at ${Number(d.block_threshold).toFixed(2)} is
+        deliberately conservative — the cost of turning nobody away shows up here instead.
+      </p>
+    </div>
+
+    <div class="grid-2">
+      <div class="card" style="margin-top:0">
+        <h2>What the layer refused</h2>
+        <p class="sub">
+          ${count(d.stats.denied)} denied and ${count(d.stats.needs_human)} escalated,
+          out of ${count(d.stats.actions_requested)} asked for.
+        </p>
+        ${denials.length ? bars(denials) : '<p class="empty">Nothing was refused.</p>'}
+      </div>
+
+      <div class="card" style="margin-top:0">
+        <h2>Reconciliation</h2>
+        <p class="sub">
+          ${count(d.settlements_checked)} settlement batches checked ·
+          ${money(d.exception_paise, { short: true })} sitting in exceptions.
+        </p>
+        ${exceptions.length ? bars(exceptions) : '<p class="empty">Everything reconciled.</p>'}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Method check</h2>
+      <p class="sub">
+        Not available to a real merchant. The month is synthetic, so the true answer is
+        known and printed beside the estimate — the point is to check the <em>method</em>
+        where the answer can be checked at all.
+      </p>
+      <div class="scroll"><table>
+        <tbody>
+          <tr><td>Uplift, measured from the holdout</td><td class="num">${money(d.uplift_measured_paise)}</td></tr>
+          <tr><td>Uplift, from ground truth</td><td class="num">${money(d.uplift_true_paise)}</td></tr>
+          <tr><td><strong>Estimator error</strong></td><td class="num"><strong>${money(d.uplift_measured_paise - d.uplift_true_paise)}</strong>
+            ${d.uplift_true_paise ? ` · ${Math.round(Math.abs(d.uplift_measured_paise - d.uplift_true_paise) / d.uplift_true_paise * 100)}% off` : ""}</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note" style="margin-top:14px">
+        ${count(d.days)} simulated days · planner “${esc(d.planner)}” ·
+        ${count(d.payments_screened)} payments screened ·
+        generated ${esc((d.generated_at || "").slice(0, 16).replace("T", " "))} UTC
+      </p>
+    </div>`;
+
+  el("m-batch").textContent = d.batch_id ?? "—";
+  el("m-policy").textContent = "policy v" + (d.stats?.policy_version ?? "—");
+}
+
+async function loadScorecard() {
+  try {
+    renderScorecard(await get("/v1/scorecard"));
+  } catch (e) {
+    el("score-body").innerHTML = `
+      <div class="card"><h2>No scorecard yet</h2>
+        <p class="sub">The dashboard reads a completed run rather than starting one — a full
+        replay takes about twenty seconds, which is not a thing to do inside a web request.</p>
+        <p class="empty">Produce one with:<br><code>python -m harness.replay</code></p>
+      </div>`;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The decision feed
+--------------------------------------------------------------------------- */
+const VERDICT = { allow: ["allow", "ALLOW"], deny: ["deny", "DENY"], needs_human: ["human", "NEEDS HUMAN"] };
+let feedFilter = "all";
+
+function why(p) {
+  // A refusal's reason is the objecting rule's own sentence. An allowed action
+  // has no objection, so it shows the agent's stated rationale instead — which
+  // is the thing a reviewer would want to argue with.
+  const objections = (p.results || []).filter((r) => r.verdict !== "allow");
+  if (objections.length) {
+    return `<span class="mono" style="color:var(--muted)">${esc(objections[0].rule_id)}</span> — ${esc(objections[0].reason)}`;
+  }
+  return esc(p.rationale || "—");
+}
+
+function renderFeed(entries) {
+  const decisions = entries
+    .filter((e) => e.entry_type === "decision")
+    .filter((e) => feedFilter === "all" || e.payload.verdict === feedFilter)
+    .reverse();
+
+  el("feed-empty").hidden = decisions.length > 0;
+  if (!decisions.length) {
+    el("feed-empty").innerHTML = "Nothing matches that filter yet.";
+  }
+
+  el("feed-rows").innerHTML = decisions.map((e) => {
+    const p = e.payload;
+    const [cls, word] = VERDICT[p.verdict] || ["plain", p.verdict];
+    return `<tr>
+      <td class="num mono">${e.seq}</td>
+      <td>${esc(p.agent)}</td>
+      <td class="mono">${esc(p.action)}</td>
+      <td><span class="badge ${cls}">${word}</span></td>
+      <td class="reason">${why(p)}</td>
+      <td class="num">${p.amount_paise ? money(p.amount_paise, { short: true }) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+document.querySelectorAll(".chip").forEach((c) => {
+  c.addEventListener("click", () => {
+    feedFilter = c.dataset.filter;
+    document.querySelectorAll(".chip").forEach((o) =>
+      o.setAttribute("aria-pressed", String(o === c)));
+    loadFeed();
+  });
+});
+
+let lastEntries = [];
+async function loadFeed() {
+  try {
+    const d = await get("/v1/ledger?limit=400");
+    lastEntries = d.entries;
+    renderFeed(lastEntries);
+    renderLedger(lastEntries);
+  } catch (e) {
+    el("feed-empty").hidden = false;
+    el("feed-empty").textContent = "Could not reach the ledger.";
+  }
+}
+el("refresh").addEventListener("click", loadFeed);
+
+/* ---------------------------------------------------------------------------
+   The ledger
+--------------------------------------------------------------------------- */
+function renderLedger(entries) {
+  el("ledger-rows").innerHTML = entries.slice(-120).reverse().map((e) => `
+    <tr>
+      <td class="num mono">${e.seq}</td>
+      <td><span class="badge plain">${esc(e.entry_type)}</span></td>
+      <td class="mono">${esc((e.recorded_at || "").slice(11, 19))}</td>
+      <td class="mono" style="color:var(--muted)">${esc(e.prev_hash.slice(0, 16))}…</td>
+      <td class="mono">${esc(e.entry_hash.slice(0, 16))}…</td>
+    </tr>`).join("");
+}
+
+async function loadVerify() {
+  try {
+    const v = await get("/v1/ledger/verify");
+    const badge = el("m-ledger");
+    badge.className = "badge " + (v.ok ? "allow" : "deny");
+    badge.textContent = v.ok ? `ledger intact · ${count(v.entries_checked)}` : "LEDGER BROKEN";
+    el("verify-box").innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="k">Chain</div>
+          <div class="v ${v.ok ? "pos" : "neg"}" style="font-size:17px">${v.ok ? "Intact" : "BROKEN"}</div>
+          <div class="n">${esc(v.detail || "")}</div></div>
+        <div class="kpi"><div class="k">Entries verified</div><div class="v">${count(v.entries_checked)}</div></div>
+      </div>
+      <p class="note" style="margin-top:14px">Head · <span class="mono">${esc(v.head)}</span></p>`;
+  } catch (e) {
+    el("verify-box").innerHTML = '<p class="empty">Could not reach the ledger.</p>';
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Boot. The feed polls so that an action submitted through /docs during a demo
+   shows up here as it is judged — which is the whole point of calling it live.
+--------------------------------------------------------------------------- */
+loadScorecard();
+loadFeed();
+loadVerify();
+setInterval(() => {
+  if (el("auto").checked) { loadFeed(); loadVerify(); }
+}, 3000);
+</script>
+</body>
+</html>

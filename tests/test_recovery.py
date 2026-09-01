@@ -13,7 +13,7 @@ from agents.recovery import (
     RulePlanner,
     build_planner,
 )
-from engine.schema import ActionType, InvoiceStatus, Verdict
+from engine.schema import ActionType, Verdict
 from tests.conftest import NOON_IST
 
 
@@ -45,7 +45,7 @@ def test_planner_leaves_invoices_that_are_not_due_yet(planner, store):
 def test_transient_decline_is_retried_before_anything_is_spent(planner, store):
     # i_small's payment failed on insufficient funds — the cheapest money on the
     # table, because the customer already intended to pay.
-    action, amount, rationale = plan(planner, store, "i_small")
+    action, _, rationale = plan(planner, store, "i_small")
     assert action is ActionType.RETRY_CHARGE
     assert "insufficient_funds" in rationale
 

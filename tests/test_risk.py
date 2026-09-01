@@ -304,11 +304,15 @@ def test_blocking_is_refused_when_the_expected_lost_sale_exceeds_the_fraud():
 
     # Half-confident is not confident enough to turn a customer away, because a
     # wrong block costs more than the sale it stops.
-    weak = economics.assess_risk(request, PolicyContext(now=NOON_IST, payment=payment, risk_score=0.5))
+    weak = economics.assess_risk(
+        request, PolicyContext(now=NOON_IST, payment=payment, risk_score=0.5)
+    )
     assert weak.verdict is Verdict.DENY
     assert "lost sale" in weak.reason
 
-    strong = economics.assess_risk(request, PolicyContext(now=NOON_IST, payment=payment, risk_score=0.9))
+    strong = economics.assess_risk(
+        request, PolicyContext(now=NOON_IST, payment=payment, risk_score=0.9)
+    )
     assert strong.verdict is Verdict.ALLOW
 
 

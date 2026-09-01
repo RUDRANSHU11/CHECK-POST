@@ -531,7 +531,8 @@ def r16_settlement_discrepancy(req: ActionRequest, ctx: PolicyContext) -> RuleRe
 
     if ctx.settlement_unknown_ids:
         shown = ", ".join(ctx.settlement_unknown_ids[:3])
-        more = "" if len(ctx.settlement_unknown_ids) <= 3 else f" (+{len(ctx.settlement_unknown_ids) - 3} more)"
+        hidden = len(ctx.settlement_unknown_ids) - 3
+        more = "" if hidden <= 0 else f" (+{hidden} more)"
         return _human(
             "settlement_discrepancy",
             f"settlement {st.settlement_id} ({st.utr}) claims {len(ctx.settlement_unknown_ids)} "

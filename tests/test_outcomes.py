@@ -8,7 +8,6 @@ attributable recovery by 3.6x without a single test failing.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -20,7 +19,6 @@ from engine.schema import (
     InvoiceStatus,
     OutcomeResult,
     Verdict,
-    rupees,
 )
 from harness.outcomes import OutcomeSimulator
 from tests.conftest import NOON_IST

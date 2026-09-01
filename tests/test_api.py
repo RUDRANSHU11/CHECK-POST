@@ -119,3 +119,44 @@ def test_ledger_feed_and_verify(client):
     assert v["ok"] is True
     assert v["entries_checked"] == 2
     assert len(v["head"]) == 64
+
+
+# -- the dashboard ---------------------------------------------------------- #
+
+def test_dashboard_is_served_by_the_same_process(client):
+    """One command on demo day, not two. The page ships from the API server, so
+    there is no build step, no second port and no CORS to misconfigure."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "<title>Checkpost</title>" in r.text
+
+
+def test_the_dashboard_needs_no_network_to_render(client):
+    """A dashboard that fetches a CDN is a dashboard that fails in a room with
+    bad wifi. Everything it needs is inline."""
+    body = client.get("/").text
+    assert "http://" not in body.replace("http://127.0.0.1", "")
+    assert "https://" not in body
+    assert "<script src=" not in body and "<link rel=\"stylesheet\"" not in body
+
+
+def test_scorecard_says_what_to_run_when_there_is_none(client, tmp_path, monkeypatch):
+    """A 404 that names the command is worth more than a stack trace."""
+    monkeypatch.setattr("engine.api.SCORECARD_PATH", tmp_path / "nope.json")
+    r = client.get("/v1/scorecard")
+    assert r.status_code == 404
+    assert "harness.replay" in r.json()["detail"]
+
+
+def test_scorecard_is_served_from_the_file_the_harness_wrote(client, tmp_path, monkeypatch):
+    """Read, never computed: a full replay takes about twenty seconds, which is
+    not a thing to do inside a web request."""
+    card = tmp_path / "scorecard.json"
+    card.write_text(
+        json.dumps({"batch_id": "test", "uplift_measured_paise": 1234}), encoding="utf-8"
+    )
+    monkeypatch.setattr("engine.api.SCORECARD_PATH", card)
+    r = client.get("/v1/scorecard")
+    assert r.status_code == 200
+    assert r.json()["uplift_measured_paise"] == 1234

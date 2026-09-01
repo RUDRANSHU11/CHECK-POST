@@ -216,7 +216,10 @@ If the net number came out negative, we show that too. That's the point.
 
 - **Backend** — FastAPI, Python
 - **Agents** — Gemini with tool calling
-- **Frontend** — Next.js, dashboard for the scorecard and the live decision feed
+- **Frontend** — one static page in `web/`, served by the same FastAPI process.
+  No build step, no node, no CORS, no second port. Deliberate: the dashboard is
+  three read-only views over endpoints that already existed, and a framework
+  would have bought nothing but a way for demo day to go wrong
 - **Storage** — SQLite or Postgres, whichever is faster to stand up
 - **Data** — synthetic generator; Razorpay test-mode APIs where they fit
 
@@ -246,8 +249,12 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 198 tests
-├── web/                  # Next.js dashboard — day 5, still empty
+├── tests/                # 203 tests
+├── web/
+│   └── index.html        # the dashboard — one file, no dependencies
+├── out/scorecard.json    # written by the replay, read by the dashboard
+├── .pylintrc             # every disable records why
+├── .github/workflows/    # lint, tests and the red team, on every push
 ├── flow.md               # how it fits together
 ├── decisions.md          # why
 └── README.md
@@ -282,8 +289,9 @@ checkpost/
       and the risk side of the economics gate
 
 **Day 5 — Sept 2**
-- [ ] Dashboard: scorecard, live decision feed, ledger viewer
-- [ ] Full 5,000-event run end to end
+- [x] Dashboard: scorecard, live decision feed, ledger viewer
+- [x] Full-month run end to end (this landed with the replay harness on day 4)
+- [x] CI that actually runs: lint, 203 tests, and the red team on every push
 - [ ] Fix whatever breaks
 
 **Day 6 — Sept 3**
@@ -332,7 +340,8 @@ our test cases instead of four separate projects.
 
 ## Status
 
-**Days 1–4 complete** (1 Sept, a day ahead of plan). 198 tests green, red team 18/18.
+**Days 1–5 complete** (1 Sept, a day ahead of plan). 203 tests green, red team
+18/18, pylint clean, CI green on every push.
 
 The layer is finished. All three agents run through it, the holdout experiment
 works, and the numbers above come from a single reproducible command.
@@ -369,3 +378,23 @@ the first thing a judge will ask about. Get a working key before day 5.
 Next: the dashboard (day 5), then the video and the pitch (day 6).
 
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
+
+---
+
+## Running the demo
+
+One command. The dashboard, the API and the docs come from the same process.
+
+```bash
+python -m harness.generate                    # once — the synthetic month
+python -m harness.replay                      # the scorecard, ~20s
+python -m harness.redteam                     # 18 attacks; exits non-zero if any got through
+
+set CHECKPOST_DB=data/replay.db
+python -m uvicorn engine.api:app              # dashboard at /, API docs at /docs
+```
+
+The decision feed polls, so an action submitted through `/docs` during the pitch
+shows up in it as it is judged. Submitting a refund against a poisoned invoice
+and watching it appear as **DENY — prompt_injection** with the reason in plain
+English is the demo.

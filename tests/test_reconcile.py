@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from agents.reconcile import ReconcileAgent
-from engine.schema import ActionRequest, ActionType, AgentName, Verdict, rupees
+from engine.schema import ActionRequest, ActionType, AgentName, Verdict
 from tests.conftest import NOON_IST
 
 
@@ -27,7 +27,7 @@ def test_a_batch_that_reconciles_is_matched(store, gateway):
 
 def test_a_short_paid_batch_becomes_a_named_exception(store, gateway):
     agent = _agent(store, gateway)
-    request, decision = agent.work(store.settlement("s_short"), NOON_IST)
+    request, _ = agent.work(store.settlement("s_short"), NOON_IST)
     assert request.action is ActionType.ESCALATE_TO_HUMAN
     assert [e.kind for e in agent.exceptions] == ["amount_mismatch"]
     assert "short" in agent.exceptions[0].detail

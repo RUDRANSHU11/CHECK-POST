@@ -12,7 +12,10 @@ from engine.ledger import GENESIS_HASH, Ledger, canonical, compute_hash
 
 def fill(lg: Ledger, n: int = 5) -> None:
     for i in range(n):
-        lg.append("decision", {"request_id": f"rq_{i}", "verdict": "allow", "amount_paise": i * 100})
+        lg.append(
+            "decision",
+            {"request_id": f"rq_{i}", "verdict": "allow", "amount_paise": i * 100},
+        )
 
 
 def test_empty_ledger_verifies(ledger):

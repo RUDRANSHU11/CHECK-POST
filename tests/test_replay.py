@@ -9,11 +9,9 @@ known.
 
 from __future__ import annotations
 
-from datetime import timedelta
 
 import pytest
 
-from engine.schema import Verdict
 from harness import replay
 from harness.generate import generate
 
@@ -172,3 +170,27 @@ def test_the_same_seed_produces_the_same_scorecard(small_run, tmp_path):
         assert again["stats"]["spend_paise"] == small_run["stats"]["spend_paise"]
     finally:
         again["ledger"].close()
+
+
+def test_the_scorecard_survives_the_trip_through_json(small_run, tmp_path):
+    """The dashboard reads a file, so the result has to serialise cleanly.
+
+    Two members cannot cross that boundary — an open SQLite handle and a
+    dataclass — and forgetting either turns the dashboard into a 500 that only
+    shows up when someone opens it, which on the day is during the demo.
+    """
+    import json
+
+    out = replay.write_json(small_run, tmp_path / "scorecard.json")
+    card = json.loads(out.read_text(encoding="utf-8"))
+
+    assert "ledger" not in card, "an open database handle must not reach the file"
+    assert card["verify"]["ok"] is True
+    assert card["uplift_measured_paise"] == small_run["uplift_measured_paise"]
+    # The dashboard reads these by name; losing one is a silently blank panel.
+    for key in (
+        "uplift_ci_low_paise", "uplift_ci_high_paise", "prevented_paise",
+        "lost_sale_paise", "missed_fraud_paise", "denials", "exceptions",
+        "block_threshold", "stats",
+    ):
+        assert key in card, f"the dashboard reads {key} and it is not in the file"

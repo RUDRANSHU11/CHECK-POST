@@ -1,0 +1,33 @@
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # The suite generates whatever data it needs into tmp directories, so it
+      # does not depend on data/dataset.json having been built first.
+      # `python -m pytest` rather than bare `pytest`: the module form puts the
+      # repo root on sys.path, so `import engine` resolves without an installed
+      # package or a PYTHONPATH nudge.
+      - name: Run the test suite
+        run: python -m pytest -q
+
+      # The red team is a gate, not a report: it exits non-zero if any attack
+      # reached an action it should not have. Run separately from pytest so a
+      # failure here is legible on its own in the checks list.
+      - name: Run the red team
+        run: python -m harness.redteam

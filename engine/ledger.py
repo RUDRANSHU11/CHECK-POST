@@ -152,7 +152,9 @@ class Ledger:
     def head(self) -> str:
         """Hash of the newest entry — the single value that commits to the whole
         history. Print it at the end of a demo run and anyone can re-verify."""
-        row = self.conn.execute("SELECT entry_hash FROM ledger ORDER BY seq DESC LIMIT 1").fetchone()
+        row = self.conn.execute(
+            "SELECT entry_hash FROM ledger ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
         return row["entry_hash"] if row else GENESIS_HASH
 
     def entries(self, entry_type: str | None = None, limit: int | None = None) -> list[LedgerEntry]:
