@@ -553,7 +553,14 @@ function renderFeed(entries) {
 
   el("feed-empty").hidden = decisions.length > 0;
   if (!decisions.length) {
-    el("feed-empty").innerHTML = "Nothing matches that filter yet.";
+    // An empty ledger and an empty filter look identical on screen and are
+    // completely different problems. The first one is almost always the server
+    // pointed at the default database instead of a run that happened.
+    el("feed-empty").innerHTML = entries.length
+      ? "Nothing matches that filter yet."
+      : 'This ledger has no entries. The server reads <code>CHECKPOST_DB</code>, ' +
+        'which defaults to an empty <code>data/checkpost.db</code> — point it at a ' +
+        'run before starting it:<br><code>$env:CHECKPOST_DB = "data/replay.db"</code>';
   }
 
   el("feed-rows").innerHTML = decisions.map((e) => {

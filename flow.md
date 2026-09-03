@@ -61,7 +61,7 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  203 tests
+├── tests/                  204 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -340,9 +340,15 @@ cd C:\Users\rudra\checkpost
 .venv\Scripts\python.exe -m harness.batch --limit 400 --days 5
 
 # serve — dashboard at http://127.0.0.1:8000/, API docs at /docs
-# CHECKPOST_DB picks which run the feed and ledger views show.
-set CHECKPOST_DB=data/replay.db
+# CHECKPOST_DB picks which run the feed and ledger views show. PowerShell
+# syntax: `set VAR=value` is cmd, and in PowerShell it sets nothing and says
+# nothing, so the dashboard quietly reads the default empty ledger instead.
+$env:CHECKPOST_DB = "data/replay.db"
 .venv\Scripts\python.exe -m uvicorn engine.api:app --reload
+
+# `[Errno 10048] only one usage of each socket address` after a clean
+# "Application startup complete" is a port clash, not an app failure: something
+# else already holds 8000. Add --port 8010.
 
 # lint, with every disable justified in .pylintrc
 .venv\Scripts\python.exe -m pylint $(git ls-files '*.py')
@@ -363,7 +369,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (203 tests green, red team 18/18, pylint clean):**
+**Working, tested (204 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
@@ -393,7 +399,7 @@ Treated 964 invoices (₹61,42,080 book) · holdout 250 (₹14,60,398, never con
 
 Recovered, treated                  ₹ 10,27,597
 Recovered, holdout scaled            ₹ 3,97,540    x4.21 from ₹94,523
-UPLIFT the agent caused              ₹ 6,30,056    95% CI ₹1,67,467 to ₹10,40,906
+UPLIFT the agent caused              ₹ 6,30,056    95% CI ₹1,94,936 to ₹10,79,642
 
 Fraud prevented                      ₹ 6,61,568    27 blocked, 11 caught in review
 Lost sales, blocked genuine                  ₹ 0    0 customers turned away
@@ -402,10 +408,10 @@ Fraud that got through               ₹ 2,13,421    12 payments
 Settlements checked 119 · 101 unresolved exceptions, ₹13,09,022 at stake
   unsettled 69 · unknown_payment 12 · duplicate_payment 10 · amount_mismatch 10
 
-Actions requested 2,447 · allowed 1,320 · denied 1,081 · escalated 46
-Refusals: economics 919 · opt_out 80 · attempt_limit 39 · unretryable 37 ·
-          prompt_injection 31 · contact_frequency 12 · block_ceiling 7 · disputed 2
-Ledger: 6,101 entries, intact
+Actions requested 2,445 · allowed 1,320 · denied 1,080 · escalated 45
+Refusals: economics 917 · opt_out 80 · attempt_limit 39 · unretryable 37 ·
+          prompt_injection 31 · contact_frequency 13 · block_ceiling 7 · disputed 2
+Ledger: 6,097 entries, intact
 
 METHOD CHECK — measured ₹6,30,056 against ground truth ₹5,71,192, 10% off
 ```

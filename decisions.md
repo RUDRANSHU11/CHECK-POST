@@ -709,3 +709,37 @@ rather than appearing in a log nobody reads.
 **Watch out for:** appending to a file with a shell heredoc writes LF into files
 that are otherwise CRLF, and pylint's `mixed-line-endings` catches it. It caught
 this twice in one session.
+
+## 2026-09-03 — Nothing that decides an outcome may iterate a set
+
+**Decision:** the replay walks the treated book in a fixed list order, and the
+bootstrap sorts its inputs before resampling. Sets stay, but only for membership
+tests.
+
+**What was wrong:** two runs of `python -m harness.replay` on one dataset
+disagreed — 2,445 requests against 2,447, economics refusals 917 against 919,
+and a 95% interval that moved by tens of thousands of rupees. Both came from
+iterating `set[str]`: Python salts string hashing per process, so the set came
+out in a different order in every process. The recovery agent therefore worked
+the invoices in a different order each run, and with a daily budget cap and a
+contact-frequency window, order decides which invoices get an action at all. The
+bootstrap drew different invoices for the same RNG seed for the same reason.
+
+**Why it hid:** every headline money figure — uplift, fraud prevented, the
+exception list — was identical across runs, because those are sums over the
+whole book. Only the counts and the interval moved, and nobody diffs counts.
+`test_the_same_seed_produces_the_same_scorecard` missed it twice over: it ran
+both replays inside one process, where the hash salt is fixed, and its list of
+keys did not include the interval. It now checks the interval, and
+`test_the_interval_does_not_depend_on_the_order_of_the_invoices` asserts the
+property directly by shuffling the input.
+
+**The rule this is the second instance of:** day 4 established that nothing
+deciding an outcome may key on a request id. This is the same rule one level
+out — nothing deciding an outcome may depend on iteration order either.
+`assign_holdout` had carried a docstring refusing process-salted hashing since
+the day it was written; the split was safe and the ordering was not.
+
+**Cost of not finding it:** the README quoted an interval no judge could have
+reproduced, and a live re-run during the pitch would have printed different
+numbers from the video.
