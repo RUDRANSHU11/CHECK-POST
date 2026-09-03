@@ -237,6 +237,10 @@ def rules() -> dict:
     return {
         "policy_version": policy.POLICY_VERSION,
         "rules": policy.rule_ids(),
+        # Which of them a signature can actually lift. Whoever is working the
+        # queue needs to tell "asking your permission" apart from "telling you
+        # to stop", and the two look identical as a needs_human verdict.
+        "human_liftable": policy.human_liftable_rules(),
         "thresholds": {
             "max_contacts_per_24h": policy.MAX_CONTACTS_PER_24H,
             "max_recovery_attempts": policy.MAX_RECOVERY_ATTEMPTS,

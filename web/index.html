@@ -229,6 +229,11 @@ tbody tr:hover { background: var(--plane); }
   font-size: 13px; color: var(--ink-2); margin-top: 8px;
   padding-left: 10px; border-left: 2px solid var(--warning);
 }
+.pend-note {
+  margin-top: 10px; font-size: 12.5px; color: var(--ink-2);
+  background: var(--warn-wash); border: 1px solid var(--warning);
+  border-radius: 6px; padding: 8px 10px;
+}
 .pend-act { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .pend-act .spacer { margin-left: auto; }
 input.txt {
@@ -664,6 +669,16 @@ el("approver").addEventListener("change", () => {
   try { localStorage.setItem(APPROVER_KEY, el("approver").value.trim()); } catch (e) { /* fine */ }
 });
 
+// Which rules a signature actually lifts, straight from the rulebook. Without
+// this the queue offers an Approve button on requests no approval will move -
+// attempt_limit is not asking permission, it is saying stop chasing this
+// invoice, and it comes back unchanged however many times you sign it.
+let LIFTABLE = new Set();
+async function loadRules() {
+  try { LIFTABLE = new Set((await get("/v1/rules")).human_liftable || []); }
+  catch (e) { LIFTABLE = new Set(); }
+}
+
 function renderPending(items) {
   const pill = el("pending-pill");
   pill.textContent = items.length;
@@ -679,6 +694,11 @@ function renderPending(items) {
     // Show every objection, not just the first. The feed can afford to show one
     // because it is a list; a person about to sign for this needs all of them.
     const objections = (p.results || []).filter((r) => r.verdict !== "allow");
+    // Every rule holding this up must lift, not merely one of them: a request
+    // stopped by refund_ceiling *and* attempt_limit is still stopped after the
+    // signature that clears the first.
+    const holds = objections.filter((r) => r.verdict === "needs_human");
+    const signable = holds.length > 0 && holds.every((r) => LIFTABLE.has(r.rule_id));
     const where = [p.customer_id, p.invoice_id, p.payment_id, p.settlement_id]
       .filter(Boolean).map(esc).join(" · ");
     return `<div class="pend" data-id="${esc(p.request_id)}">
@@ -693,10 +713,14 @@ function renderPending(items) {
       </div>`).join("")}
       ${p.rationale ? `<div class="pend-meta" style="margin-top:8px">
         agent's reason: ${esc(p.rationale)}</div>` : ""}
+      ${signable ? "" : `<div class="pend-note">
+        No signature moves this one. ${esc(holds.map((r) => r.rule_id).join(", "))}
+        is not asking for permission — it is asking for a different action.
+        Rejecting records that you saw it and decided.</div>`}
       <div class="pend-act">
         <input class="txt note" placeholder="note (optional, goes in the ledger)">
         <span class="spacer"></span>
-        <button class="ghost approve">Approve</button>
+        <button class="ghost approve"${signable ? "" : ' disabled title="No signature lifts this rule"'}>Approve</button>
         <button class="ghost reject">Reject</button>
       </div>
     </div>`;
@@ -721,13 +745,36 @@ async function decide(card, verb) {
       body: JSON.stringify({ approver, note: card.querySelector(".note").value.trim() }),
     });
     if (!r.ok) throw new Error(String(r.status));
-    // Approving does not run the action — the agent resubmits and the rules run
-    // again. Say so, or the operator waits for something that is not coming.
-    card.innerHTML = verb === "approve"
-      ? `<div class="pend-meta">Approved by ${esc(approver)}. The agent resubmits;
-         the rulebook runs again with the ceiling raised.</div>`
-      : `<div class="pend-meta">Rejected by ${esc(approver)}. Nothing is blacklisted —
-         a resubmission is judged exactly as this one was.</div>`;
+
+    if (verb === "reject") {
+      card.innerHTML = `<div class="pend-meta">Rejected by ${esc(approver)}. Nothing is
+        blacklisted — a resubmission would be judged exactly as this one was.</div>`;
+    } else {
+      // Approving raises a ceiling, it does not run anything. Rather than leave
+      // the operator waiting for an agent that comes back on its own schedule,
+      // ask for the judgement now and show it — the whole point is that the
+      // rulebook runs again, so the second verdict is the thing worth seeing.
+      card.innerHTML = `<div class="pend-meta">Approved by ${esc(approver)} — running it
+        back through the rulebook…</div>`;
+      const again = await fetch(`/v1/actions/${encodeURIComponent(card.dataset.id)}/resubmit`,
+                                { method: "POST" });
+      if (!again.ok) throw new Error(String(again.status));
+      const d = await again.json();
+      const [cls, word] = VERDICT[d.verdict] || ["plain", d.verdict];
+      const objections = (d.results || []).filter((x) => x.verdict !== "allow");
+      card.innerHTML = `
+        <div class="pend-meta">Approved by ${esc(approver)}, then judged again from scratch:</div>
+        <div class="pend-head" style="margin-top:8px">
+          <span class="badge ${cls}">${word}</span>
+          <span class="mono" style="color:var(--muted)">${esc(d.decision_id)}</span>
+        </div>
+        ${objections.map((x) => `<div class="pend-rule">
+          <span class="mono" style="color:var(--muted)">${esc(x.rule_id)}</span> — ${esc(x.reason)}
+        </div>`).join("")}
+        <div class="pend-meta" style="margin-top:10px">${objections.length
+          ? "A signature raises one ceiling. Every rule that still objects is still objecting."
+          : "Every rule ran again and passed."}</div>`;
+    }
     loadFeed();
     setTimeout(loadPending, 1200);
   } catch (e) {
@@ -791,7 +838,7 @@ async function loadVerify() {
 --------------------------------------------------------------------------- */
 loadScorecard();
 loadFeed();
-loadPending();
+loadRules().then(loadPending);
 loadVerify();
 setInterval(() => {
   if (el("auto").checked) { loadFeed(); loadPending(); loadVerify(); }

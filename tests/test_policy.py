@@ -11,6 +11,7 @@ from engine.policy import (
     REFUND_HUMAN_THRESHOLD_PAISE,
     PolicyContext,
     decide,
+    human_liftable_rules,
     rule_ids,
 )
 from engine.schema import ActionRequest, ActionType, AgentName, Verdict, rupees
@@ -385,3 +386,35 @@ def test_the_tolerance_is_absolute_not_proportional(store):
                       settlement_gross_paise=gross + SETTLEMENT_TOLERANCE_PAISE + 1),
     )
     assert verdict is Verdict.NEEDS_HUMAN
+
+
+# -- what a signature can and cannot lift ---------------------------------- #
+
+def test_human_liftable_is_the_set_of_rules_that_actually_lift(store):
+    """Behaviour, not bookkeeping.
+
+    human_liftable_rules() reads the rules' own source, so it cannot drift from
+    the list. What it can still be is wrong about what lifting means, so this
+    checks the claim the dashboard hangs on it: refund_ceiling changes its mind
+    when a human signs, attempt_limit does not. Telling an operator otherwise
+    puts an Approve button on something no signature will ever move.
+    """
+    liftable = set(human_liftable_rules())
+    assert liftable == {"refund_ceiling", "write_off_ceiling", "block_ceiling"}
+    assert "attempt_limit" not in liftable
+
+    big = req(
+        ActionType.ISSUE_REFUND, invoice_id="i_big", payment_id="p_expired",
+        amount_paise=REFUND_HUMAN_THRESHOLD_PAISE + rupees(1),
+    )
+    assert decide(big, ctx(store, payment=store.payment("p_expired")))[0] is Verdict.NEEDS_HUMAN
+    assert decide(
+        big, ctx(store, payment=store.payment("p_expired"), human_approved=True)
+    )[0] is not Verdict.NEEDS_HUMAN
+
+    # The other kind: a signature leaves it exactly where it was, because the
+    # rule is not asking permission - it is saying stop chasing this invoice.
+    call = req(ActionType.PLACE_CALL, invoice_id="i_big")
+    maxed = dict(invoice=store.invoice("i_big"), attempts_on_invoice=MAX_RECOVERY_ATTEMPTS)
+    assert decide(call, ctx(store, **maxed))[0] is Verdict.NEEDS_HUMAN
+    assert decide(call, ctx(store, **maxed, human_approved=True))[0] is Verdict.NEEDS_HUMAN

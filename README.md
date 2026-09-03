@@ -7,7 +7,7 @@
 
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-**16 rules · 217 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
+**16 rules · 223 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
@@ -133,11 +133,19 @@ row in the ledger naming the rule that let it through.
 
 **needs human** is not a dead end. Those requests queue at `GET /v1/pending` and
 show up on the dashboard, where a person approves or rejects them under their own
-name. An approval raises the ceiling for that one request; it does not execute
-anything. The agent resubmits, every rule runs again, and a signature given this
-morning cannot authorise contacting somebody who opts out this afternoon. The
+name. Approving does not execute anything — it raises a ceiling. The request goes
+back through `submit()` unchanged and every rule runs again, so a signature given
+this morning cannot authorise contacting somebody who opts out this afternoon. The
 queue is derived from the ledger rather than stored beside it, so it survives a
 restart and cannot drift out of step with the log.
+
+Two kinds of escalation come out looking identical, and the difference decides
+what a person should do about them. `refund_ceiling` is **asking permission** — a
+signature turns it into an allow. `attempt_limit` is **telling you to stop
+chasing this invoice** — no signature moves it, and approving one just hands it
+straight back. The dashboard reads which is which from `GET /v1/rules`, derived
+from the rules' own source so the list cannot drift, and greys out Approve where
+it would achieve nothing.
 
 ---
 
@@ -191,8 +199,10 @@ A five minute run, in this order:
    something a human gets asked to rubber-stamp. What *does* land in **Waiting on
    you** is the honest version — a large refund on a clean invoice, held only
    because it clears the ₹5,000 auto-approval ceiling. Approve it on screen under
-   your own name; the agent resubmits, every rule runs again, and this time it
-   passes. A signature raises one ceiling. It does not switch the rulebook off.
+   your own name and the dashboard runs it straight back through the rulebook:
+   every rule fires again, `refund_ceiling` now reads *"above threshold but a
+   human approved it"*, and the verdict flips to **ALLOW** in front of the judge.
+   A signature raises one ceiling. It does not switch the rulebook off.
 5. **It's honest.** Final scorecard shows the holdout comparison, the cost of false
    positives, money spent on interventions, and an exception list of everything the
    system could not resolve.
@@ -315,7 +325,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 217 tests
+├── tests/                # 223 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -357,7 +367,7 @@ checkpost/
 **Day 5 — Sept 2**
 - [x] Dashboard: scorecard, live decision feed, ledger viewer
 - [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 217 tests, and the red team on every push
+- [x] CI that actually runs: lint, 223 tests, and the red team on every push
 - [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
@@ -367,7 +377,10 @@ checkpost/
 - [x] Setup documented from a clean clone, verified against one
 - [x] Interface run end to end — API, dashboard, ledger chain, the injection demo
 - [x] Human review queue — `needs_human` had nowhere to go; now it queues at
-      `/v1/pending` and a person signs it off on the dashboard
+      `/v1/pending`, a person signs it off on the dashboard, and the request goes
+      straight back through the rulebook so the second verdict is visible
+- [x] Approve is greyed out on escalations no signature can lift (`attempt_limit`
+      is telling you to stop chasing, not asking permission)
 - [x] Server finds the newest run in `data/` itself instead of serving a blank page
 - [x] README polish, architecture diagram
 - [ ] Demo video
@@ -414,7 +427,7 @@ our test cases instead of four separate projects.
 
 **All six build days are done; submission is Sept 5.** The layer is finished:
 all three agents run through it, the holdout experiment works, and every number
-above comes from a single reproducible command. 217 tests green, red team 18/18,
+above comes from a single reproducible command. 223 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
@@ -427,7 +440,7 @@ dry runs.
 | Ledger | 6,097 entries, hash chain verified by `engine.ledger verify` and by the API, independently |
 | Replay + holdout | reproducible byte for byte across runs; estimator lands within 10% of ground truth on the full month |
 | API + dashboard | run end to end — every field the dashboard reads is served, no external requests, no 5xx |
-| Human review queue | escalations queue at `/v1/pending` and are approved or rejected on the dashboard; the queue rebuilds from the ledger after a restart |
+| Human review queue | escalations queue at `/v1/pending`, get approved or rejected on the dashboard, and go straight back through the rulebook; the queue rebuilds from the ledger after a restart |
 | **Gemini planner** | **the one HTTP call is still unproven.** Everything up to it is covered |
 
 That last row is the honest one. Six tests drive the planner against the
@@ -515,7 +528,7 @@ copy .env.example .env      # optional: only the Gemini planner reads it
 The tests need nothing else — they build their own data in tmp directories:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q        # 217 tests, ~9s
+.venv\Scripts\python.exe -m pytest -q        # 223 tests, ~9s
 ```
 
 `python -m pytest`, not bare `pytest`: the module form puts the repo root on
