@@ -28,6 +28,7 @@ than defining it away.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -213,6 +214,10 @@ class GeminiPlanner:
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.client = genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
         self._fallback = RulePlanner()
+        #: Why the last call fell back, if it did. A fallback is invisible in a
+        #: 964-invoice run — every proposal still looks reasonable, because it
+        #: came from the rule planner. The probe below reads this.
+        self.last_error: Exception | None = None
 
     def plan(
         self, invoice: Invoice, payments: list[Payment], tried: int, now: datetime
@@ -239,7 +244,11 @@ class GeminiPlanner:
         try:
             response = self.client.models.generate_content(
                 model=self.model,
-                contents=f"Invoice to work:\n{facts}",
+                # JSON rather than a Python dict repr: `None`, `True` and
+                # single-quoted keys are not what a model has been trained to
+                # read, and the memo is the one field an attacker controls — it
+                # should arrive in a format with unambiguous string boundaries.
+                contents=f"Invoice to work:\n{json.dumps(facts, ensure_ascii=False, indent=2)}",
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT,
                     tools=[types.Tool(function_declarations=[ACTION_TOOL])],
@@ -257,6 +266,7 @@ class GeminiPlanner:
                     )
         # A planner must never take the run down, whatever the SDK raises.
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.last_error = exc
             print(f"  [gemini unavailable: {type(exc).__name__}: {exc}] falling back to rules")
 
         return self._fallback.plan(invoice, payments, tried, now)
@@ -359,3 +369,45 @@ class RecoveryAgent:
             if attempt is not None:
                 out.append(attempt)
         return out
+
+# --------------------------------------------------------------------------- #
+# Probe
+# --------------------------------------------------------------------------- #
+
+if __name__ == "__main__":
+    # `python -m agents.recovery` — one live round trip against the real API,
+    # on one real invoice. The first time a key is tried that should cost five
+    # seconds, not a twenty-minute replay that quietly falls back to the rule
+    # planner 964 times and reports numbers no different from the offline run.
+    import sys
+
+    from engine.console import setup_console
+    from engine.schema import utcnow
+
+    setup_console()
+    _planner = build_planner()
+    print(f"planner: {_planner.name}")
+
+    if not isinstance(_planner, GeminiPlanner):
+        print(
+            "No usable GEMINI_API_KEY. Put one in .env — the file is gitignored, "
+            "and a real AI Studio key is 39 characters and starts AIza."
+        )
+        sys.exit(1)
+
+    _store = DataStore.load()
+    _invoice = _store.collectable()[0]
+    print(
+        f"invoice: {_invoice.invoice_id}  "
+        f"{_invoice.amount_paise / 100:,.2f}  {_invoice.status.value}"
+    )
+
+    _proposal = _planner.plan(
+        _invoice, _store.payments_for(_invoice.invoice_id), 0, utcnow()
+    )
+    if _planner.last_error is not None:
+        print("the call did not round trip — the proposal above is the rule planner's")
+        sys.exit(1)
+
+    print(f"proposal: {_proposal}")
+    print("round trip OK — the tool call parsed into an action")

@@ -272,7 +272,7 @@ checkpost/
 │   ├── api.py            # FastAPI wrapper
 │   └── console.py        # UTF-8 stdout, so the rupee sign survives Windows
 ├── agents/
-│   ├── recovery.py       # rule planner + Gemini planner
+│   ├── recovery.py       # rule planner + Gemini planner (+ live probe)
 │   ├── risk.py           # scores a payment, proposes a block or a review
 │   └── reconcile.py      # settlements against the merchant's own books
 ├── harness/
@@ -281,7 +281,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 204 tests
+├── tests/                # 209 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -323,7 +323,7 @@ checkpost/
 **Day 5 — Sept 2**
 - [x] Dashboard: scorecard, live decision feed, ledger viewer
 - [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 204 tests, and the red team on every push
+- [x] CI that actually runs: lint, 209 tests, and the red team on every push
 - [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
@@ -372,7 +372,7 @@ our test cases instead of four separate projects.
 
 ## Status
 
-**Days 1–5 complete**, day 6 under way. 204 tests green, red team 18/18,
+**Days 1–5 complete**, day 6 under way. 209 tests green, red team 18/18,
 pylint clean, CI green on every push.
 
 The layer is finished. All three agents run through it, the holdout experiment
@@ -401,14 +401,32 @@ What day 4 added, and what each thing is for:
   nearly a lakh between two runs of the same seed. The scorecard is the
   deliverable; a scorecard that is not reproducible is not evidence.
 
-**The largest risk left** is unchanged from day 3: the Gemini planner has still
-never round-tripped against a live key. Every number above comes from the
-deterministic planner. That is a defensible position — it is what makes the run
-reproducible — but "we wrote an LLM agent and never ran it" is not, and it is
-the first thing a judge will ask about, and it is now the only open item on
-the engineering side — there is still no `.env` with a key on this machine.
+**The largest risk left** is still the Gemini planner: no live key has ever
+round-tripped, and every number above comes from the deterministic planner. That
+part is deliberate — it is what makes the run reproducible — but "we wrote an
+LLM agent and never ran it" is not a sentence to say to a judge.
 
-**The defect day 6 surfaced,** fixed:
+Day 6 took everything except the network hop off that list. Six tests drive the
+planner against the **installed google-genai types** rather than a hand-rolled
+mock: a real `GenerateContentResponse` parses into an action, the tool schema is
+one the SDK accepts, a planner that raises falls back instead of taking the run
+down, an action the enum has never heard of falls back rather than crashing, the
+memo reaches the model unaltered, and — the one that matters — a planner that
+proposes a ₹50,000 discount on a ₹9,000 invoice is sent to a human by
+`discount_ceiling`. What remains unproven is one HTTP call.
+
+`python -m agents.recovery` is that call, on one real invoice, in five seconds:
+
+```powershell
+.venv\Scripts\python.exe -m agents.recovery
+```
+
+It prints which planner was built, the proposal, and whether the call actually
+round-tripped — a fallback is invisible in a 964-invoice run, because every
+proposal still looks reasonable coming from the rule planner. It exits non-zero
+if the key is missing or the call failed.
+
+**The defects day 6 surfaced,** all fixed:
 
 - The replay was not reproducible. Two runs of the same command on the same
   dataset disagreed — 2,445 requests against 2,447, and a confidence interval
@@ -421,6 +439,20 @@ the engineering side — there is still no `.env` with a key on this machine.
   came back twice, in the ordering rather than the split. The numbers in this
   README are from the fixed run, and two consecutive runs now agree byte for
   byte apart from the ledger's timestamps.
+
+- **Nothing ever read `.env`.** python-dotenv has been a dependency since day 1
+  and `.env.example` documents `GEMINI_API_KEY`, but no code called
+  `load_dotenv()`, so a key written into `.env` was ignored and the only symptom
+  was an LLM planner that "didn't work". `engine/__init__.py` now loads it — by
+  explicit path, not python-dotenv's default, which walks *up* the tree until it
+  finds any `.env` at all. On this machine that default found an unrelated
+  project's file two directories up and handed Checkpost its expired key: the
+  probe reported `planner: gemini` and then failed on every single invoice.
+
+- **`python -m engine.ledger verify` ignored `CHECKPOST_DB`** and always opened
+  the empty default database, so it printed `ledger intact — 0 entries verified`
+  one line after the docs tell you to point the variable at a real run. The most
+  convincing wrong answer that tool can give.
 
 Next: the video and the pitch.
 

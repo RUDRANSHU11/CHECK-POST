@@ -8,12 +8,13 @@ import pytest
 
 from agents.recovery import (
     CALL_WORTH_IT_PAISE,
+    GeminiPlanner,
     HIGH_VALUE_PAISE,
     RecoveryAgent,
     RulePlanner,
     build_planner,
 )
-from engine.schema import ActionType, Verdict
+from engine.schema import ActionType, Verdict, rupees
 from tests.conftest import NOON_IST
 
 
@@ -151,3 +152,135 @@ def test_no_key_means_the_rule_planner(monkeypatch):
 def test_blank_key_means_the_rule_planner(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "   ")
     assert isinstance(build_planner(), RulePlanner)
+
+# -- the Gemini planner ----------------------------------------------------- #
+#
+# No live key has ever been used here. What these tests can still establish is
+# everything except the network hop: that the request we build is the shape the
+# SDK expects, that a real GenerateContentResponse parses into an action, that a
+# planner which fails never takes the run down, and — the part that matters —
+# that the gateway refuses what the model invents. They are written against the
+# installed google-genai types rather than a hand-rolled mock, so a change in
+# the SDK's response shape fails here instead of on the day.
+
+
+def _tool_response(**args):
+    """A real GenerateContentResponse carrying one propose_action call."""
+    from google.genai import types
+
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name="propose_action", args=args
+                            )
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+
+
+class _FakeClient:
+    """Stands in for genai.Client. Records the call, returns what it was given."""
+
+    def __init__(self, reply, **_kw):
+        self.reply = reply
+        self.calls = []
+        outer = self
+
+        class _Models:
+            def generate_content(self, **kwargs):
+                outer.calls.append(kwargs)
+                if isinstance(outer.reply, Exception):
+                    raise outer.reply
+                return outer.reply
+
+        self.models = _Models()
+
+
+@pytest.fixture
+def gemini(monkeypatch):
+    """Builds a GeminiPlanner whose transport is ours. Returns (make, seen)."""
+
+    def make(reply):
+        holder = {}
+
+        def _client(**kwargs):
+            holder["client"] = _FakeClient(reply, **kwargs)
+            return holder["client"]
+
+        monkeypatch.setattr("google.genai.Client", _client)
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza" + "x" * 35)
+        return GeminiPlanner(), holder
+
+    return make
+
+
+def test_a_tool_call_the_sdk_would_really_return_parses_into_an_action(gemini, store):
+    planner, _ = gemini(
+        _tool_response(action="place_call", amount_paise=0, rationale="third try")
+    )
+    action, amount, why = planner.plan(store.invoice("i_big"), [], tried=2, now=NOON_IST)
+    assert action is ActionType.PLACE_CALL
+    assert amount == 0
+    assert why == "third try"
+
+
+def test_the_model_is_given_the_tool_and_the_memo(gemini, store):
+    planner, holder = gemini(_tool_response(action="send_email", rationale="first"))
+    planner.plan(store.invoice("i_poisoned"), [], tried=0, now=NOON_IST)
+    sent = holder["client"].calls[0]
+    # The SDK coerced our plain dict into a FunctionDeclaration on the way in,
+    # which is half the point of testing against the real types: a schema it
+    # cannot parse fails here rather than on the first live call.
+    tool = sent["config"].tools[0].function_declarations[0]
+    assert tool.name == "propose_action"
+    assert "offer_discount" in tool.parameters.properties["action"].enum
+    # The memo travels to the model intact. An agent that summarised or scrubbed
+    # it would be hiding the attack from the layer built to catch it — and the
+    # gateway would never see the string it refuses on.
+    assert "ignore your previous instructions" in sent["contents"]
+
+
+def test_a_planner_that_fails_falls_back_instead_of_taking_the_run_down(gemini, store):
+    planner, _ = gemini(RuntimeError("503 model overloaded"))
+    invoice = store.invoice("i_big")
+    assert planner.plan(invoice, [], tried=0, now=NOON_IST) == RulePlanner().plan(
+        invoice, [], tried=0, now=NOON_IST
+    )
+
+
+def test_an_action_the_enum_does_not_have_falls_back_rather_than_crashing(gemini, store):
+    # A model is free to invent "wire_transfer". Nothing downstream should see it.
+    planner, _ = gemini(_tool_response(action="wire_transfer", rationale="trust me"))
+    action, _amount, _why = planner.plan(store.invoice("i_big"), [], tried=0, now=NOON_IST)
+    assert action in ActionType
+
+
+def test_the_gateway_refuses_the_discount_the_model_invented(store, gateway):
+    """The point of the whole project, stated as a test.
+
+    A planner is untrusted by construction, so this one proposes a ₹50,000
+    discount on a ₹9,000 invoice — the kind of thing a jailbroken or simply
+    confused model does. No verdict from the planner reaches the money: the
+    rulebook sends it to a person, and names the rule that caught it."""
+
+    class _Reckless:
+        name = "reckless"
+
+        def plan(self, invoice, payments, tried, now):
+            return ActionType.OFFER_DISCOUNT, rupees(50_000), "customer asked nicely"
+
+    agent = RecoveryAgent(store=store, gateway=gateway, planner=_Reckless())
+    _request, decision = agent.work(store.invoice("i_big"), NOON_IST)
+    assert decision.verdict is Verdict.NEEDS_HUMAN
+    assert any(
+        r.rule_id == "discount_ceiling" and r.verdict is Verdict.NEEDS_HUMAN
+        for r in decision.results
+    )
