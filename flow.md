@@ -29,7 +29,7 @@ the layer is general. The depth is in the layer, not in them.
 | pydantic 2 | every domain type in `engine/schema.py` | validation at the edge; `extra="forbid"` turns a typo'd agent field into a 422 instead of a value that silently never reaches a rule |
 | FastAPI + uvicorn | `engine/api.py` | thin HTTP layer, free OpenAPI docs at `/docs` for the demo |
 | SQLite | the ledger, `data/checkpost.db` | zero setup, and its triggers enforce append-only at the storage layer |
-| pytest | `tests/` | 209 tests, all green |
+| pytest | `tests/` | 217 tests, all green |
 | google-genai 2.20 | `agents/recovery.py` | LLM planner. Tested against the SDK's own types; the network hop alone is unproven — no valid key on this machine. `python -m agents.recovery` probes it in five seconds |
 | python-dotenv | `engine/__init__.py` | reads the repo's own `.env`, by explicit path. The default `load_dotenv()` walks up the tree and will happily load another project's file |
 | one static HTML file | `web/index.html` | dashboard, served by the API process itself. No build step and no CDN: a page that needs a toolchain or the network to render is a page that fails on demo day |
@@ -62,7 +62,7 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  209 tests
+├── tests/                  217 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -349,7 +349,8 @@ cd C:\Users\rudra\checkpost
 .venv\Scripts\python.exe -m harness.batch --limit 400 --days 5
 
 # serve — dashboard at http://127.0.0.1:8000/, API docs at /docs
-# CHECKPOST_DB picks which run the feed and ledger views show. PowerShell
+# The server picks the newest run in data/ by itself. Override it like this
+# when you want a specific one — PowerShell
 # syntax: `set VAR=value` is cmd, and in PowerShell it sets nothing and says
 # nothing, so the dashboard quietly reads the default empty ledger instead.
 $env:CHECKPOST_DB = "data/replay.db"
@@ -378,7 +379,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (209 tests green, red team 18/18, pylint clean):**
+**Working, tested (217 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,

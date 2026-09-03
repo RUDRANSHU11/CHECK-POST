@@ -160,3 +160,41 @@ def test_scorecard_is_served_from_the_file_the_harness_wrote(client, tmp_path, m
     r = client.get("/v1/scorecard")
     assert r.status_code == 200
     assert r.json()["uplift_measured_paise"] == 1234
+
+
+# -- the human queue ------------------------------------------------------- #
+
+def _escalating(n: int = 1) -> dict:
+    return action(n, action="issue_refund", payment_id="p_expired", amount_paise=600_000)
+
+
+def test_pending_lists_what_the_rulebook_escalated(client):
+    assert client.get("/v1/pending").json() == {"count": 0, "pending": []}
+    client.post("/v1/actions", json=_escalating())
+
+    body = client.get("/v1/pending").json()
+    assert body["count"] == 1
+    assert body["pending"][0]["request_id"] == "rq_1"
+    assert any(r["rule_id"] == "refund_ceiling" for r in body["pending"][0]["results"])
+
+
+def test_approving_and_rejecting_drain_the_queue(client):
+    client.post("/v1/actions", json=_escalating(1))
+    client.post("/v1/actions", json=_escalating(2))
+
+    assert client.post("/v1/actions/rq_1/approve", json={"approver": "ops@x.in"}).status_code == 200
+    assert client.post("/v1/actions/rq_2/reject", json={"approver": "ops@x.in"}).status_code == 200
+    assert client.get("/v1/pending").json()["count"] == 0
+
+
+def test_signing_for_something_not_pending_is_refused(client):
+    # The ledger is append-only, so a signature against a mistyped id is a
+    # permanent row naming a real person as approving a request that never
+    # existed. 404 before the write, not an apology after it.
+    for verb in ("approve", "reject"):
+        r = client.post(f"/v1/actions/rq_typo/{verb}", json={"approver": "ops@x.in"})
+        assert r.status_code == 404
+        assert "not awaiting human review" in r.json()["detail"]
+
+    entries = client.get("/v1/ledger?limit=400").json()["entries"]
+    assert not [e for e in entries if e["entry_type"].startswith("human_")]
