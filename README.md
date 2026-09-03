@@ -384,6 +384,18 @@ checkpost/
       is telling you to stop chasing, not asking permission)
 - [x] Server finds the newest run in `data/` itself instead of serving a blank page
 - [x] README polish, architecture diagram
+
+**Day 7 — Sept 4**
+- [x] Full verification pass, nothing reused from the previous run: regenerate
+      the month from the recorded seed, replay it, run the red team, verify the
+      chain — plus 225 tests and pylint. Every number published above came back
+      identical; the ledger head is the only thing that moves between runs,
+      because it hashes timestamps
+- [x] Deleted the last copy of the key-shape claim. Day 6 removed it from
+      `.env.example`, the `GeminiPlanner` docstring and `decisions.md`, and
+      missed the probe's own no-key message — the one place still stating it as
+      fact rather than recounting it as a mistake, and the one a person reads at
+      exactly the moment it would cost them a day
 - [ ] Demo video
 - [ ] Dry run the pitch three times
 
@@ -426,11 +438,17 @@ our test cases instead of four separate projects.
 
 ## Status
 
-**All six build days are done; submission is Sept 5.** The layer is finished:
-all three agents run through it, the holdout experiment works, and every number
+**Every build day is done; submission is Sept 5.** The layer is finished: all
+three agents run through it, the holdout experiment works, and every number
 above comes from a single reproducible command. 225 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
+
+Re-verified end to end on **Sept 4**, from the seed rather than from the
+leftovers of the last run — `generate`, `replay`, `redteam`, `ledger verify`,
+`pytest`, `pylint`. The scorecard came back with the same 2,445 requests, the
+same ₹12,82,464, and the same 6,097 intact entries printed above. The one field
+that changed is the ledger head, which hashes timestamps and is supposed to.
 
 ### What is proven, and what isn't
 

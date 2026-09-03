@@ -411,8 +411,10 @@ if __name__ == "__main__":
 
     if not isinstance(_planner, GeminiPlanner):
         print(
-            "No usable GEMINI_API_KEY. Put one in .env — the file is gitignored, "
-            "and a real AI Studio key is 39 characters and starts AIza."
+            "No usable GEMINI_API_KEY. Put one in .env — the file is gitignored. "
+            "Do not judge the key by its shape: this line used to claim 39 "
+            "characters starting AIza, and the working key here is 52 and "
+            "starts AQ.Ab8R. Running this is the only check that settles it."
         )
         sys.exit(1)
 
