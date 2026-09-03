@@ -390,10 +390,18 @@ reproducible. The LLM planner is what makes the system interesting — it handle
 cases nobody enumerated — and it is also the component most likely to propose
 something reckless, which is the argument for the checkpoint.
 
-**Status:** the Gemini path is **written but never executed**. The only key on
-this machine is the malformed one from earlier projects (50 chars, `Ab8R…`;
-real AI Studio keys are 39 and start `AIza`). Treat its first live run as
-debugging.
+**Status (3 Sept):** the Gemini path round-trips against a live key — the tool
+call parses into an action, and `harness.replay --llm` runs the month through it.
+The key on this machine had been written off for a day as malformed because a
+comment claimed real keys are 39 characters starting `AIza`; it is 52 and starts
+`AQ.Ab8R`, and it works. The lesson is cheaper than the day it cost: there is a
+five-second probe, `python -m agents.recovery`, and a shape rule is not evidence.
+
+What the free tier will not buy is the month. One planner call per open treated
+invoice per day is 26,622 calls against a cap of 20 a day for
+`gemini-2.5-flash`. So every published number stays the rule planner's, and the
+scorecard carries `planner_calls` and `planner_fallbacks` so `planner: gemini`
+is a claim a reader can check rather than take.
 
 ---
 

@@ -321,6 +321,12 @@ def run(
         "batch_id": stats["batch_id"],
         "dataset_path": dataset_path,
         "planner": planner.name,
+        # `planner: gemini` is a claim about who decided, and on the free tier
+        # (20 requests a day for gemini-2.5-flash) it stops being true at call
+        # 21 without anything in the scorecard changing. These two numbers are
+        # what makes it checkable.
+        "planner_calls": getattr(planner, "calls", 0),
+        "planner_fallbacks": getattr(planner, "fallbacks", 0),
         "block_threshold": risk.block_threshold,
         "days": days,
         "requests": requests,
@@ -415,11 +421,18 @@ def render(r: dict) -> str:
     def line(label: str, value: str, note: str = "") -> str:
         return f"{label:<40}{value:>18}   {note}".rstrip()
 
+    def _planner_note(r: dict) -> str:
+        """Says how much of `planner: gemini` was actually Gemini."""
+        calls, fell_back = r.get("planner_calls", 0), r.get("planner_fallbacks", 0)
+        if not calls or not fell_back:
+            return ""
+        return f" ({calls - fell_back}/{calls} live, {fell_back} fell back to rules)"
+
     rule = "-" * WIDTH
     out = [
         "",
         f"CHECKPOST SCORECARD                     batch {r['batch_id']}",
-        f"{r['days']} simulated days   planner: {r['planner']}   "
+        f"{r['days']} simulated days   planner: {r['planner']}{_planner_note(r)}   "
         f"policy v{s['policy_version']}",
         "=" * WIDTH,
         "",

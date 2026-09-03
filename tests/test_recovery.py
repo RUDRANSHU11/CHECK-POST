@@ -256,6 +256,26 @@ def test_a_planner_that_fails_falls_back_instead_of_taking_the_run_down(gemini, 
     )
 
 
+def test_a_run_can_tell_how_much_of_gemini_was_really_gemini(gemini, store):
+    """The free tier allows 20 requests a day; a month is 964 invoices.
+
+    Past the cap every call 429s and returns a rule-planner proposal that looks
+    exactly like a good one, under a scorecard still headed `planner: gemini`.
+    The counters are what make that claim checkable, so the summary line can say
+    `0/2 live` instead of quietly taking the credit."""
+    planner, _ = gemini(RuntimeError("429 RESOURCE_EXHAUSTED"))
+    invoice = store.invoice("i_big")
+    planner.plan(invoice, [], tried=0, now=NOON_IST)
+    planner.plan(invoice, [], tried=0, now=NOON_IST)
+    assert (planner.calls, planner.fallbacks) == (2, 2)
+
+
+def test_a_tool_call_that_lands_is_not_counted_as_a_fallback(gemini, store):
+    planner, _ = gemini(_tool_response(action="retry_charge", rationale="transient"))
+    planner.plan(store.invoice("i_big"), [], tried=0, now=NOON_IST)
+    assert (planner.calls, planner.fallbacks) == (1, 0)
+
+
 def test_an_action_the_enum_does_not_have_falls_back_rather_than_crashing(gemini, store):
     # A model is free to invent "wire_transfer". Nothing downstream should see it.
     planner, _ = gemini(_tool_response(action="wire_transfer", rationale="trust me"))

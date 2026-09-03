@@ -29,8 +29,8 @@ the layer is general. The depth is in the layer, not in them.
 | pydantic 2 | every domain type in `engine/schema.py` | validation at the edge; `extra="forbid"` turns a typo'd agent field into a 422 instead of a value that silently never reaches a rule |
 | FastAPI + uvicorn | `engine/api.py` | thin HTTP layer, free OpenAPI docs at `/docs` for the demo |
 | SQLite | the ledger, `data/checkpost.db` | zero setup, and its triggers enforce append-only at the storage layer |
-| pytest | `tests/` | 223 tests, all green |
-| google-genai 2.20 | `agents/recovery.py` | LLM planner. Tested against the SDK's own types; the network hop alone is unproven — no valid key on this machine. `python -m agents.recovery` probes it in five seconds |
+| pytest | `tests/` | 225 tests, all green |
+| google-genai 2.20 | `agents/recovery.py` | LLM planner. Tested against the SDK's own types, and round-tripped against a live key on 3 Sept. `python -m agents.recovery` re-proves it in five seconds |
 | python-dotenv | `engine/__init__.py` | reads the repo's own `.env`, by explicit path. The default `load_dotenv()` walks up the tree and will happily load another project's file |
 | one static HTML file | `web/index.html` | dashboard, served by the API process itself. No build step and no CDN: a page that needs a toolchain or the network to render is a page that fails on demo day |
 
@@ -62,7 +62,7 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  223 tests
+├── tests/                  225 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -110,7 +110,7 @@ checkpost/
 
 ### The rulebook
 
-Thirteen rules in `engine/policy.py`, each `(request, context) -> RuleResult | None`
+Sixteen rules in `engine/policy.py`, each `(request, context) -> RuleResult | None`
 where `None` means "not applicable". Registered by the `@rule` decorator at
 `engine/policy.py:121`.
 
@@ -129,6 +129,9 @@ where `None` means "not applicable". Registered by the `@rule` decorator at
 | r11 | `discount_ceiling` | discount > 30% of invoice | needs_human |
 | r12 | `write_off_ceiling` | write-off > ₹1,000 | needs_human |
 | r13 | `prompt_injection` | instruction-like text in memo or evidence | deny |
+| r14 | `block_ceiling` | blocking an order above the automatic limit | needs_human |
+| r15 | `risk_evidence` | the agent's claimed risk score is not what the gateway recomputes | deny |
+| r16 | `settlement_discrepancy` | a settlement marked matched that does not reconcile | deny |
 
 Every threshold is a named constant in one block at `engine/policy.py:38` — the
 whole rulebook's configuration is readable at a glance.
@@ -178,9 +181,11 @@ either a different calculation or not a recovery decision at all.
 - `GeminiPlanner` — `agents/recovery.py:199`. Same job, LLM with a tool-call
   schema. Falls back to `RulePlanner` on any failure and records why in
   `last_error`, because a silent fallback across 964 invoices looks exactly like
-  a working LLM. **Never executed against a live key** — the tests drive it
-  through the installed google-genai types instead, and `python -m
-  agents.recovery` is the one-invoice probe for the hop they cannot cover.
+  a working LLM. **Round-tripped against a live key on 3 Sept** — the tests drive
+  it through the installed google-genai types, `python -m agents.recovery` is the
+  one-invoice probe for the hop they cannot cover, and `harness.replay --llm`
+  drives the month through it as far as the quota reaches — `calls` and
+  `fallbacks` on the planner say how far that was, and reach the scorecard.
 - `RecoveryAgent.work()` — `agents/recovery.py:291`. Plans one action, builds the
   `ActionRequest`, carries the invoice memo through as `evidence` so the
   injection guard can see what the planner was reading, and submits.
@@ -339,7 +344,7 @@ cd C:\Users\rudra\checkpost
 # the scorecard: all three agents, 80/20 treated vs holdout, whole month
 .venv\Scripts\python.exe -m harness.replay
 .venv\Scripts\python.exe -m harness.replay --block-threshold 0.45   # price the dial
-.venv\Scripts\python.exe -m harness.replay --llm                    # Gemini, if a key exists
+.venv\Scripts\python.exe -m harness.replay --llm                    # Gemini; says how many calls fell back
 
 # the attacks — exits non-zero if anything got through
 .venv\Scripts\python.exe -m harness.redteam
@@ -379,7 +384,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (223 tests green, red team 18/18, pylint clean):**
+**Working, tested (225 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
@@ -394,9 +399,9 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 - FastAPI surface over all of it
 - Recovery agent with a deterministic planner; Gemini planner tested against
   the installed google-genai types — response parsing, tool schema, fallback on
-  failure, and the gateway refusing a discount the planner invented. Only the
-  network hop is unproven; `python -m agents.recovery` is a five-second probe
-  for it
+  failure, and the gateway refusing a discount the planner invented. The network
+  hop is proven too (3 Sept); `python -m agents.recovery` re-proves it in five
+  seconds
 - Risk agent over a shared, gateway-recomputed signal model
 - Reconciler with four named exception classes and an unsettled sweep
 - Replay harness: 80/20 treated vs holdout, bootstrap confidence interval
@@ -461,10 +466,12 @@ Submit **5 Sept**, early in the day.
 
 **Known gaps to watch:**
 
-- The Gemini planner has never round-tripped. The key in the sibling projects is
-  malformed (50 chars, `Ab8R…`); a real AI Studio key is 39 and starts `AIza`.
-  This is now the largest single risk left: every number above comes from the
-  deterministic planner, and the LLM path is the one a judge will ask about.
+- The Gemini planner round-trips (3 Sept) but cannot run the month: one planner
+  call per open treated invoice per day is 26,622 calls, and the free tier caps
+  `gemini-2.5-flash` at 20 a day. Every number above therefore comes from the
+  deterministic planner — on purpose, and the scorecard now says how much of an
+  `--llm` run was really the model (`planner_calls`, `planner_fallbacks`). A paid
+  key would close this; nothing in the code needs to change.
 - The risk agent has no LLM variant at all. The `Scorer` protocol is there for
   one, and the gateway already refuses inflated claims, so the interesting demo
   (an LLM talked into blocking a competitor) is reachable — but not written.

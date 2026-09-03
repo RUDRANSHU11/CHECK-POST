@@ -7,7 +7,7 @@
 
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-**16 rules · 223 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
+**16 rules · 225 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
@@ -325,7 +325,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 223 tests
+├── tests/                # 225 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -367,12 +367,13 @@ checkpost/
 **Day 5 — Sept 2**
 - [x] Dashboard: scorecard, live decision feed, ledger viewer
 - [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 223 tests, and the red team on every push
+- [x] CI that actually runs: lint, 225 tests, and the red team on every push
 - [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
-- [x] Gemini planner driven against the installed SDK types — everything but
-      the network hop is now covered, and `python -m agents.recovery` is that hop
+- [x] Gemini planner driven against the installed SDK types, then the network
+      hop itself: `python -m agents.recovery` round-trips a live invoice, and
+      `--llm` reports how much of the run the model actually decided
 - [x] `.env` actually read; `engine.ledger verify` actually honours `CHECKPOST_DB`
 - [x] Setup documented from a clean clone, verified against one
 - [x] Interface run end to end — API, dashboard, ledger chain, the injection demo
@@ -427,7 +428,7 @@ our test cases instead of four separate projects.
 
 **All six build days are done; submission is Sept 5.** The layer is finished:
 all three agents run through it, the holdout experiment works, and every number
-above comes from a single reproducible command. 223 tests green, red team 18/18,
+above comes from a single reproducible command. 225 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
@@ -441,9 +442,12 @@ dry runs.
 | Replay + holdout | reproducible byte for byte across runs; estimator lands within 10% of ground truth on the full month |
 | API + dashboard | run end to end — every field the dashboard reads is served, no external requests, no 5xx |
 | Human review queue | escalations queue at `/v1/pending`, get approved or rejected on the dashboard, and go straight back through the rulebook; the queue rebuilds from the ledger after a restart |
-| **Gemini planner** | **the one HTTP call is still unproven.** Everything up to it is covered |
+| **Gemini planner** | round-trips against a live key; the free tier's 20 requests a day is why the headline numbers are the rule planner's |
 
-That last row is the honest one. Six tests drive the planner against the
+That last row used to read *the one HTTP call is still unproven*. It is proven
+now: `python -m agents.recovery` round-trips one real invoice through Gemini and
+parses the tool call into an action, and `harness.replay --llm` runs the month
+through it. Eight tests cover everything either side of that hop against the
 **installed google-genai types** rather than a hand-rolled mock: a real
 `GenerateContentResponse` parses into an action, the tool schema is one the SDK
 accepts, a planner that raises falls back instead of taking the run down, an
@@ -451,19 +455,26 @@ action the enum has never heard of falls back rather than crashing, the memo
 reaches the model unaltered, and — the one that matters — a planner proposing a
 ₹50,000 discount on a ₹9,000 invoice is sent to a human by `discount_ceiling`.
 
-What remains is one network hop, and `python -m agents.recovery` is that hop —
-one real invoice, five seconds:
+What the free tier will not buy is the *month*. One planner call per open
+treated invoice per day is **26,622 calls**, against a cap of 20 a day for
+`gemini-2.5-flash` — 1,331 days of quota. So the numbers in this README come
+from the deterministic planner, on purpose, and the scorecard now states how
+much of any `--llm` run was really the model:
 
-```powershell
-.venv\Scripts\python.exe -m agents.recovery
+```
+31 simulated days   planner: gemini (0/124 live, 124 fell back to rules)   policy v1.1
 ```
 
-It prints which planner was built, the proposal, and whether the call actually
-round-tripped. A silent fallback is invisible across 964 invoices, because every
-proposal still looks reasonable coming from the rule planner. It exits non-zero
-if the key is missing or the call failed.
+```powershell
+.venv\Scripts\python.exe -m agents.recovery      # one live invoice, five seconds
+.venv\Scripts\python.exe -m harness.replay --llm  # the month, quota permitting
+```
 
-### Six defects this work surfaced, all fixed
+The probe prints which planner was built, the proposal, and whether the call
+actually round-tripped, and exits non-zero if the key is missing or the call
+failed.
+
+### Seven defects this work surfaced, all fixed
 
 The list is here on purpose. A project whose whole claim is *honest measurement*
 does not get to hide the times its own measurements were wrong.
@@ -501,6 +512,18 @@ does not get to hide the times its own measurements were wrong.
   the empty default database, so it printed `ledger intact — 0 entries verified`
   one line after the docs tell you to point the variable at a real run. The most
   convincing wrong answer that tool can give.
+- **A scorecard could say `planner: gemini` when Gemini decided nothing.** The
+  free tier allows 20 requests a day for `gemini-2.5-flash`; call 21 onwards
+  429s, and `GeminiPlanner` correctly falls back to the rule planner rather than
+  taking the run down. Correct, and silent: the proposals still look reasonable,
+  because they are the rule planner's, and the header still said `planner:
+  gemini`. The scorecard now carries `planner_calls` and `planner_fallbacks`,
+  and the header reads `gemini (0/124 live, 124 fell back to rules)`. Found
+  because the key on this machine was written off for a day as malformed on the
+  strength of a comment in `.env.example` claiming real keys are 39 characters
+  starting `AIza`. It is 52 and starts `AQ.Ab8R`, and it works. Both the comment
+  and the docstring repeating it are gone; the answer takes five seconds to
+  fetch and nobody fetched it.
 
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
@@ -528,7 +551,7 @@ copy .env.example .env      # optional: only the Gemini planner reads it
 The tests need nothing else — they build their own data in tmp directories:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q        # 223 tests, ~9s
+.venv\Scripts\python.exe -m pytest -q        # 225 tests, ~9s
 ```
 
 `python -m pytest`, not bare `pytest`: the module form puts the repo root on
