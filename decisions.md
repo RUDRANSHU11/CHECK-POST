@@ -743,3 +743,58 @@ the day it was written; the split was safe and the ordering was not.
 **Cost of not finding it:** the README quoted an interval no judge could have
 reproduced, and a live re-run during the pitch would have printed different
 numbers from the video.
+
+## 2026-09-03 — The LLM planner is tested against the SDK, not against a mock
+
+**Decision:** six tests build real `google.genai.types` objects — a
+`GenerateContentResponse` carrying a `FunctionCall` — and hand them to
+`GeminiPlanner` through a fake transport. A hand-rolled mock would have proved
+only that our own assumptions agree with themselves.
+
+**What it caught immediately:** the SDK coerces `ACTION_TOOL` from a plain dict
+into a `FunctionDeclaration` on the way in. The first version of the test
+asserted `tool["name"]` and failed with `'FunctionDeclaration' object is not
+subscriptable` — which is the test doing its job: a schema the SDK cannot parse
+now fails in CI rather than on the first live call.
+
+**What it also changed:** the prompt sent a Python dict repr. `None`,
+single-quoted keys and `True` are not a format a model has been trained to read,
+and the memo is the one field an attacker controls, so it now goes as JSON with
+unambiguous string boundaries.
+
+**What the tests deliberately do not cover:** the HTTP call. That is what
+`python -m agents.recovery` is for — one invoice, five seconds, non-zero exit if
+the call did not round-trip. `GeminiPlanner.last_error` exists for that probe:
+the planner falls back to rules on any failure, which is right in a batch and
+indistinguishable from success when you are trying to find out whether a key
+works.
+
+**The test worth having above all the others:** a planner that proposes a
+₹50,000 discount on a ₹9,000 invoice gets `NEEDS_HUMAN` from
+`discount_ceiling`. Everything else here checks that the planner works. That one
+checks that it does not matter whether it does.
+
+
+## 2026-09-03 — .env is loaded by explicit path, never by search
+
+**Decision:** `engine/__init__.py` loads the repo's own `.env` by an absolute
+path built from `__file__`, rather than calling bare `load_dotenv()`.
+
+**Two bugs in one line.** python-dotenv had been in `requirements.txt` since day
+1 and `.env.example` documented `GEMINI_API_KEY`, but nothing ever called it: a
+key written into `.env` was simply ignored, and the only symptom was an LLM
+planner that "didn't work" — the same symptom as a wrong key, a rate limit, or
+no network.
+
+Then the obvious fix, bare `load_dotenv()`, was worse. Its default walks *up*
+the directory tree until it finds any `.env` at all, and on this machine that is
+a file in the user's home directory belonging to an unrelated project. The probe
+reported `planner: gemini`, built a client on that project's stale key, and
+failed on every invoice. An app that silently adopts another project's
+credentials is harder to debug than one with no key at all, and on a shared
+machine it is a way to spend someone else's quota.
+
+**Why the package `__init__` and not each entry point:** the API, the harness,
+the three agents and the ledger CLI all import `engine`, and a config that
+depends on which module you happened to run is a config that will be wrong
+exactly once, on the day.

@@ -29,8 +29,9 @@ the layer is general. The depth is in the layer, not in them.
 | pydantic 2 | every domain type in `engine/schema.py` | validation at the edge; `extra="forbid"` turns a typo'd agent field into a 422 instead of a value that silently never reaches a rule |
 | FastAPI + uvicorn | `engine/api.py` | thin HTTP layer, free OpenAPI docs at `/docs` for the demo |
 | SQLite | the ledger, `data/checkpost.db` | zero setup, and its triggers enforce append-only at the storage layer |
-| pytest | `tests/` | 127 tests, all green |
-| google-genai 2.20 | `agents/recovery.py` | LLM planner. Written, **never run** — no valid key on this machine |
+| pytest | `tests/` | 209 tests, all green |
+| google-genai 2.20 | `agents/recovery.py` | LLM planner. Tested against the SDK's own types; the network hop alone is unproven — no valid key on this machine. `python -m agents.recovery` probes it in five seconds |
+| python-dotenv | `engine/__init__.py` | reads the repo's own `.env`, by explicit path. The default `load_dotenv()` walks up the tree and will happily load another project's file |
 | one static HTML file | `web/index.html` | dashboard, served by the API process itself. No build step and no CDN: a page that needs a toolchain or the network to render is a page that fails on demo day |
 
 Dependencies are pinned loosely in `requirements.txt` and installed into `.venv`.
@@ -61,7 +62,7 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  204 tests
+├── tests/                  209 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -175,8 +176,11 @@ either a different calculation or not a recovery decision at all.
   email → SMS → WhatsApp → call, skipping rungs an invoice cannot justify at
   either end. Exhausted ladder escalates to a human.
 - `GeminiPlanner` — `agents/recovery.py:199`. Same job, LLM with a tool-call
-  schema. **Written, never executed** — no valid key on this machine. Falls back
-  to `RulePlanner` on any failure.
+  schema. Falls back to `RulePlanner` on any failure and records why in
+  `last_error`, because a silent fallback across 964 invoices looks exactly like
+  a working LLM. **Never executed against a live key** — the tests drive it
+  through the installed google-genai types instead, and `python -m
+  agents.recovery` is the one-invoice probe for the hop they cannot cover.
 - `RecoveryAgent.work()` — `agents/recovery.py:291`. Plans one action, builds the
   `ActionRequest`, carries the invoice memo through as `evidence` so the
   injection guard can see what the planner was reading, and submits.
@@ -327,6 +331,11 @@ cd C:\Users\rudra\checkpost
 # tests
 .venv\Scripts\python.exe -m pytest -q
 
+# one live Gemini round trip on one invoice, five seconds. Non-zero if the key
+# is missing or the call failed — a silent fallback to the rule planner is
+# invisible in a full run, because its proposals look perfectly reasonable.
+.venv\Scripts\python.exe -m agents.recovery
+
 # the scorecard: all three agents, 80/20 treated vs holdout, whole month
 .venv\Scripts\python.exe -m harness.replay
 .venv\Scripts\python.exe -m harness.replay --block-threshold 0.45   # price the dial
@@ -369,7 +378,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (204 tests green, red team 18/18, pylint clean):**
+**Working, tested (209 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
@@ -382,7 +391,11 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
   the recovery side; fraud-prevented against lost-sale on the risk side
 - Gateway: submit → rulebook → gate → logged, counters, restart, human approval
 - FastAPI surface over all of it
-- Recovery agent with a deterministic planner; Gemini planner written but unrun
+- Recovery agent with a deterministic planner; Gemini planner tested against
+  the installed google-genai types — response parsing, tool schema, fallback on
+  failure, and the gateway refusing a discount the planner invented. Only the
+  network hop is unproven; `python -m agents.recovery` is a five-second probe
+  for it
 - Risk agent over a shared, gateway-recomputed signal model
 - Reconciler with four named exception classes and an unsettled sweep
 - Replay harness: 80/20 treated vs holdout, bootstrap confidence interval
