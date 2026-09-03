@@ -276,6 +276,11 @@ def build_planner() -> Planner:
     """Gemini when a key is configured, rules otherwise."""
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
+        # Every caller reaches here only after asking for the LLM, so a silent
+        # fallback is a lie by omission: `replay --llm` would print a scorecard
+        # that says `planner: rule` in one line near the top and be mistaken for
+        # an LLM result. Say it where the person who typed --llm is looking.
+        print("  [no GEMINI_API_KEY in .env or the shell] using rules")
         return RulePlanner()
     try:
         return GeminiPlanner()
