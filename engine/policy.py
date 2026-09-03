@@ -6,7 +6,7 @@ Design constraints that shaped this file:
 
 * **Rules are pure functions.** ``(request, context) -> RuleResult | None``. They
   read nothing global, hit no database and take no clock reading of their own —
-  everything they need arrives on the context. That is what makes all eleven of
+  everything they need arrives on the context. That is what makes all sixteen of
   them unit-testable without standing up a server, and it is why the same rule
   behaves identically in a live call and in a replay of last month.
 * **Every rule runs, every time.** We do not short-circuit on the first denial.
@@ -20,6 +20,7 @@ Design constraints that shaped this file:
 
 from __future__ import annotations
 
+import inspect
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -584,6 +585,25 @@ def decide(req: ActionRequest, ctx: PolicyContext) -> tuple[Verdict, list[RuleRe
         if _SEVERITY[r.verdict] > _SEVERITY[verdict]:
             verdict = r.verdict
     return verdict, results
+
+
+def human_liftable_rules() -> list[str]:
+    """Which rules a human signature can actually lift, short ids.
+
+    Read off the rules themselves rather than hand-listed beside them, because
+    such a list is wrong the first time a rule changes and nobody notices until
+    an operator is clicking Approve on something no signature will move.
+
+    The distinction is the whole difference between the two kinds of escalation
+    this engine produces. ``refund_ceiling`` is asking a person for permission.
+    ``attempt_limit`` is telling them to stop chasing and do something else —
+    approving it changes nothing, and the queue hands it straight back.
+    """
+    return [
+        fn.__name__.split("_", 1)[1]
+        for fn in _RULES
+        if "human_approved" in inspect.getsource(fn)
+    ]
 
 
 def rule_ids() -> list[str]:

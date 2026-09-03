@@ -198,3 +198,20 @@ def test_signing_for_something_not_pending_is_refused(client):
 
     entries = client.get("/v1/ledger?limit=400").json()["entries"]
     assert not [e for e in entries if e["entry_type"].startswith("human_")]
+
+
+def test_resubmit_endpoint_completes_the_round_trip(client):
+    body = _escalating()
+    assert client.post("/v1/actions", json=body).json()["verdict"] == "needs_human"
+    client.post("/v1/actions/rq_1/approve", json={"approver": "ops@x.in"})
+
+    r = client.post("/v1/actions/rq_1/resubmit")
+    assert r.status_code == 200
+    assert r.json()["verdict"] == "allow"
+    assert client.get("/v1/pending").json()["count"] == 0
+
+
+def test_resubmit_of_an_unknown_request_is_404(client):
+    r = client.post("/v1/actions/rq_never_asked/resubmit")
+    assert r.status_code == 404
+    assert "no request" in r.json()["detail"]
