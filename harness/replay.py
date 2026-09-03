@@ -121,6 +121,16 @@ def bootstrap_uplift(
     if not treated or not holdout:
         return 0, 0
 
+    # Sorted, because the caller builds these from a set of invoice ids and
+    # Python salts string hashing per process: same seed, same data, different
+    # set iteration order, so rng.randrange picked different invoices on every
+    # run and the interval moved by tens of thousands of rupees between two
+    # runs of one command. The point estimate never moved, which is what made it
+    # invisible. assign_holdout refuses process-salted hashing for the same
+    # reason; the interval is quoted at least as often as the estimate.
+    treated = sorted(treated)
+    holdout = sorted(holdout)
+
     rng = random.Random(seed)
     book_treated = sum(book for _, book in treated)
     estimates = []
@@ -168,7 +178,14 @@ def run(
     all_ids = [i.invoice_id for i in collectable]
 
     holdout_ids = assign_holdout(all_ids, store.seed, holdout_fraction)
-    treated_ids = {i for i in all_ids if i not in holdout_ids}
+    # A list *and* a set, deliberately. The set is for membership tests; the
+    # list is the order the recovery agent works the book in. Iterating the set
+    # instead — which this did — handed the agent a different order every run,
+    # because Python salts string hashing per process. With a daily budget cap
+    # and a contact-frequency window, order decides which invoices get an
+    # action at all: two runs of one command came out 2,445 and 2,447 requests.
+    treated_order = [i for i in all_ids if i not in holdout_ids]
+    treated_ids = set(treated_order)
 
     book_treated = sum(
         store.invoice(i).amount_paise for i in treated_ids  # type: ignore[union-attr]
@@ -225,7 +242,7 @@ def run(
         # 2. Recovery works the treated group only. This line is the experiment.
         open_treated = [
             inv
-            for inv in (store.invoice(i) for i in treated_ids)
+            for inv in (store.invoice(i) for i in treated_order)
             if inv is not None and inv.invoice_id not in sim.recovered
         ]
         for request, decision in recovery.run(open_treated, now):

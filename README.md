@@ -92,6 +92,38 @@ The difference between the groups is the real number.
 
 ---
 
+## How it fits together
+
+```
+      recovery agent ─┐
+      risk scorer     ├──►  POST /v1/actions
+      reconciler     ─┘            │
+                                   ▼
+              ┌────────────────────────────────────────┐
+              │  Gateway — the only way to the money   │
+              │                                        │
+              │   1  log the ask, before judging it    │
+              │   2  rulebook · 16 rules               │
+              │   3  economics gate · runs only on an  │──►  ledger
+              │      allow, can only tighten it        │     append-only,
+              │   4  log the verdict and the reason    │     hash-chained
+              └───────────────────┬────────────────────┘     (SQLite)
+                                  │                             ▲
+                    allow · deny · needs human                  │
+                                  │                             │
+                        the agent acts, then reports ───────────┘
+                        what actually happened
+
+  harness/replay.py  treated 80% vs holdout 20%  ──►  out/scorecard.json
+  web/index.html     three read-only views over the same API the agents call
+```
+
+The ask is logged **before** the verdict exists, so an action that crashes the
+process mid-decision still leaves a trace. Nothing reaches the money without a
+row in the ledger naming the rule that let it through.
+
+---
+
 ## The agents riding on top
 
 Three thin agents, all of them forced to go through Checkpost. They exist to prove the
@@ -157,7 +189,7 @@ RECOVERY — measured against a holdout
   Recovered, holdout scaled              ₹ 3,97,540   x4.21 from ₹ 94,523
   ──────────────────────────────────────────────────
   UPLIFT the agent caused                ₹ 6,30,056
-    95% confidence interval    ₹ 1,67,467 to ₹ 10,40,906
+    95% confidence interval    ₹ 1,94,936 to ₹ 10,79,642
 
 RISK — every block priced both ways     (block at 0.70)
 
@@ -181,8 +213,8 @@ THE BOTTOM LINE
   ──────────────────────────────────────────────────
   NET VALUE CREATED                     ₹ 12,82,464
 
-  Actions requested 2,447 · allowed 1,320 · denied 1,081 · escalated 46
-  Ledger: 6,101 entries — intact
+  Actions requested 2,445 · allowed 1,320 · denied 1,080 · escalated 45
+  Ledger: 6,097 entries — intact
 
 METHOD CHECK — not available to a real merchant
   Uplift, measured from the holdout      ₹ 6,30,056
@@ -249,7 +281,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 203 tests
+├── tests/                # 204 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -291,12 +323,12 @@ checkpost/
 **Day 5 — Sept 2**
 - [x] Dashboard: scorecard, live decision feed, ledger viewer
 - [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 203 tests, and the red team on every push
-- [ ] Fix whatever breaks
+- [x] CI that actually runs: lint, 204 tests, and the red team on every push
+- [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
 - [ ] Demo video
-- [ ] README polish, architecture diagram
+- [x] README polish, architecture diagram
 - [ ] Dry run the pitch three times
 
 **Sept 5 — submit early in the day, not at midnight.**
@@ -340,8 +372,8 @@ our test cases instead of four separate projects.
 
 ## Status
 
-**Days 1–5 complete** (1 Sept, a day ahead of plan). 203 tests green, red team
-18/18, pylint clean, CI green on every push.
+**Days 1–5 complete**, day 6 under way. 204 tests green, red team 18/18,
+pylint clean, CI green on every push.
 
 The layer is finished. All three agents run through it, the holdout experiment
 works, and the numbers above come from a single reproducible command.
@@ -373,9 +405,24 @@ What day 4 added, and what each thing is for:
 never round-tripped against a live key. Every number above comes from the
 deterministic planner. That is a defensible position — it is what makes the run
 reproducible — but "we wrote an LLM agent and never ran it" is not, and it is
-the first thing a judge will ask about. Get a working key before day 5.
+the first thing a judge will ask about, and it is now the only open item on
+the engineering side — there is still no `.env` with a key on this machine.
 
-Next: the dashboard (day 5), then the video and the pitch (day 6).
+**The defect day 6 surfaced,** fixed:
+
+- The replay was not reproducible. Two runs of the same command on the same
+  dataset disagreed — 2,445 requests against 2,447, and a confidence interval
+  that moved by tens of thousands of rupees — because two places iterated a
+  *set* of invoice ids. Python salts string hashing per process, so the recovery
+  agent worked the book in a different order every run, and with a daily budget
+  cap order decides which invoices get an action at all. The point estimate
+  never moved, which is what made it invisible. `assign_holdout` had refused
+  process-salted hashing for exactly this reason since day 4; the same mistake
+  came back twice, in the ordering rather than the split. The numbers in this
+  README are from the fixed run, and two consecutive runs now agree byte for
+  byte apart from the ledger's timestamps.
+
+Next: the video and the pitch.
 
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
@@ -385,14 +432,27 @@ See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
 One command. The dashboard, the API and the docs come from the same process.
 
-```bash
-python -m harness.generate                    # once — the synthetic month
-python -m harness.replay                      # the scorecard, ~20s
-python -m harness.redteam                     # 18 attacks; exits non-zero if any got through
+Always through `.venv\Scripts\python.exe`. The machine's bare `python` is the
+Windows Store shim and has none of this project's dependencies, so plain
+`python -m uvicorn ...` fails with `No module named 'uvicorn'`.
 
-set CHECKPOST_DB=data/replay.db
-python -m uvicorn engine.api:app              # dashboard at /, API docs at /docs
+```powershell
+.venv\Scripts\python.exe -m harness.generate   # once — the synthetic month
+.venv\Scripts\python.exe -m harness.replay     # the scorecard, ~20s
+.venv\Scripts\python.exe -m harness.redteam    # 18 attacks; non-zero if any got through
+
+# CHECKPOST_DB picks which run the feed and ledger views show.
+# PowerShell syntax — `set VAR=value` is cmd, and in PowerShell it fails
+# silently, leaving the dashboard pointed at the default empty ledger.
+$env:CHECKPOST_DB = "data/replay.db"
+.venv\Scripts\python.exe -m uvicorn engine.api:app
 ```
+
+Dashboard at <http://127.0.0.1:8000/>, API docs at `/docs`.
+
+If the log says `Application startup complete` and then `[Errno 10048] ... only
+one usage of each socket address`, something else already holds port 8000 — the
+app is fine, the socket is not. Pick another: `--port 8010`.
 
 The decision feed polls, so an action submitted through `/docs` during the pitch
 shows up in it as it is judged. Submitting a refund against a poisoned invoice

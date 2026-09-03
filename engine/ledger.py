@@ -246,18 +246,23 @@ class Ledger:
 # --------------------------------------------------------------------------- #
 
 if __name__ == "__main__":
+    import os
     import sys
 
     from engine.console import setup_console
 
     setup_console()
     cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
-    db = sys.argv[2] if len(sys.argv) > 2 else "data/checkpost.db"
+    # Same CHECKPOST_DB the server reads. Without this the CLI verified
+    # data/checkpost.db no matter which run you had just served, and an empty
+    # ledger verifies clean — "intact, 0 entries" is the most convincing wrong
+    # answer this tool can give.
+    db = sys.argv[2] if len(sys.argv) > 2 else os.getenv("CHECKPOST_DB", "data/checkpost.db")
     ledger = Ledger(db)
 
     if cmd == "verify":
         result = ledger.verify()
-        print(result)
+        print(f"{db}: {result}")
         print(f"head: {ledger.head()}")
         sys.exit(0 if result.ok else 1)
     elif cmd == "tail":

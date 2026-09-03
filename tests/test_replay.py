@@ -37,6 +37,27 @@ def test_assignment_does_not_depend_on_the_order_of_the_ids():
     assert replay.assign_holdout(ids, 7) == replay.assign_holdout(list(reversed(ids)), 7)
 
 
+def test_the_interval_does_not_depend_on_the_order_of_the_invoices():
+    """The interval is quoted as often as the estimate, so it has to be as
+    reproducible as the estimate.
+
+    It was not: the caller builds these pairs from a *set* of invoice ids, and
+    Python salts string hashing per process, so the resampler drew different
+    invoices on every run. Two runs of one command reported intervals tens of
+    thousands of rupees apart while the point estimate sat still."""
+    import random as _random
+
+    treated = [(n * 37 % 900, 1_000 + n) for n in range(300)]
+    holdout = [(n * 11 % 400, 1_000 + n) for n in range(80)]
+    shuffled_t, shuffled_h = list(treated), list(holdout)
+    _random.Random(1).shuffle(shuffled_t)
+    _random.Random(2).shuffle(shuffled_h)
+
+    assert replay.bootstrap_uplift(treated, holdout, seed=5) == replay.bootstrap_uplift(
+        shuffled_t, shuffled_h, seed=5
+    )
+
+
 # --------------------------------------------------------------------------- #
 # A small end-to-end replay
 # --------------------------------------------------------------------------- #
@@ -160,6 +181,8 @@ def test_the_same_seed_produces_the_same_scorecard(small_run, tmp_path):
     try:
         for key in (
             "uplift_measured_paise",
+            "uplift_ci_low_paise",
+            "uplift_ci_high_paise",
             "uplift_true_paise",
             "prevented_paise",
             "lost_sale_paise",
