@@ -213,3 +213,86 @@ def test_outcomes_are_recorded(gateway):
     assert len(outcomes) == 1
     assert outcomes[0].payload["amount_recovered_paise"] == rupees(40)
     assert gateway.ledger.verify().ok
+
+
+# -- the human queue ------------------------------------------------------- #
+
+def _big_refund(n: int = 1) -> ActionRequest:
+    """A refund over the auto-approval ceiling, which is the cleanest way to
+    land a request at needs_human without depending on a rule's thresholds."""
+    return rq(
+        n,
+        ActionType.ISSUE_REFUND,
+        payment_id="p_expired",
+        amount_paise=REFUND_HUMAN_THRESHOLD_PAISE + rupees(1),
+    )
+
+
+def test_needs_human_lands_in_the_queue_with_its_reason(gateway):
+    assert gateway.pending() == []
+    assert gateway.submit(_big_refund(), now=NOON_IST).verdict is Verdict.NEEDS_HUMAN
+
+    queued = gateway.pending()
+    assert [p["request_id"] for p in queued] == ["rq_1"]
+    # The reason has to travel with it. A queue of request ids tells the person
+    # signing nothing about what they are signing.
+    assert any(r["rule_id"] == "refund_ceiling" for r in queued[0]["results"])
+    assert queued[0]["amount_paise"] == REFUND_HUMAN_THRESHOLD_PAISE + rupees(1)
+
+
+def test_approving_then_resubmitting_clears_the_queue(gateway):
+    big = _big_refund()
+    gateway.submit(big, now=NOON_IST)
+    gateway.approve("rq_1", approver="ops@merchant.in")
+    assert gateway.pending() == []
+
+    # And the resubmission does not put it back.
+    assert gateway.submit(big, now=NOON_IST).verdict is Verdict.ALLOW
+    assert gateway.pending() == []
+
+
+def test_rejecting_empties_the_queue_without_granting_anything(gateway):
+    big = _big_refund()
+    gateway.submit(big, now=NOON_IST)
+    gateway.reject("rq_1", approver="ops@merchant.in", note="not our error")
+    assert gateway.pending() == []
+    assert "rq_1" not in gateway._approved_requests
+
+    # A rejection is not a blacklist: resubmitting is judged exactly as before,
+    # which means straight back onto the queue rather than silently denied.
+    assert gateway.submit(big, now=NOON_IST).verdict is Verdict.NEEDS_HUMAN
+    assert [p["request_id"] for p in gateway.pending()] == ["rq_1"]
+    assert [e.entry_type for e in gateway.ledger.entries()].count("human_rejection") == 1
+
+
+def test_queue_survives_a_restart(store, tmp_path):
+    db = tmp_path / "queue.db"
+    gw1 = Gateway(store, Ledger(db))
+    gw1.submit(_big_refund(1), now=NOON_IST)
+    gw1.submit(_big_refund(2), now=NOON_IST)
+    gw1.reject("rq_2", approver="ops@merchant.in")
+    gw1.ledger.close()
+
+    # Rebuilt from the log like every other counter, so there is no second store
+    # to fall out of step with the ledger.
+    gw2 = Gateway(store, Ledger(db))
+    assert [p["request_id"] for p in gw2.pending()] == ["rq_1"]
+    gw2.ledger.close()
+
+
+def test_a_denied_injection_never_reaches_the_human_queue(gateway):
+    """A refusal is not an escalation.
+
+    The poisoned invoice trips refund_ceiling (needs_human) *and*
+    prompt_injection (deny), and deny wins. If the queue keyed off "some rule
+    said needs_human" rather than the final verdict, an attacker could put their
+    own request in front of a tired operator with an Approve button next to it.
+    """
+    d = gateway.submit(
+        rq(1, ActionType.ISSUE_REFUND, invoice_id="i_poisoned",
+           payment_id="p_expired", amount_paise=REFUND_HUMAN_THRESHOLD_PAISE + rupees(1)),
+        now=NOON_IST,
+    )
+    assert d.verdict is Verdict.DENY
+    assert {r.rule_id for r in d.results if r.verdict is Verdict.NEEDS_HUMAN} == {"refund_ceiling"}
+    assert gateway.pending() == []

@@ -217,6 +217,34 @@ tbody tr:hover { background: var(--plane); }
   border-left: 2px solid var(--axis); padding: 2px 0 2px 14px;
   color: var(--ink-2); font-size: 13px; max-width: 74ch;
 }
+/* -- the human queue -------------------------------------------------- */
+.pend {
+  border: 1px solid var(--ring); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 10px; background: var(--plane);
+}
+.pend-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pend-amt { font-size: 20px; font-weight: 640; letter-spacing: -0.02em; }
+.pend-meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.pend-rule {
+  font-size: 13px; color: var(--ink-2); margin-top: 8px;
+  padding-left: 10px; border-left: 2px solid var(--warning);
+}
+.pend-act { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.pend-act .spacer { margin-left: auto; }
+input.txt {
+  font: inherit; font-size: 12.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--ring);
+  border-radius: 6px; padding: 4px 9px; min-width: 190px;
+}
+.ghost.approve:hover { color: var(--good-ink); border-color: var(--good); }
+.ghost.reject:hover  { color: var(--crit-ink); border-color: var(--critical); }
+.count-pill {
+  display: inline-block; margin-left: 6px; padding: 0 6px;
+  border-radius: 999px; font-size: 11px; font-weight: 650;
+  background: var(--warning); color: #3a2900;
+}
+.count-pill[hidden] { display: none; }
+
 .empty { color: var(--muted); padding: 28px 0; }
 .empty code {
   display: inline-block; margin-top: 8px; padding: 6px 10px;
@@ -245,6 +273,7 @@ tbody tr:hover { background: var(--plane); }
   <nav role="tablist">
     <button role="tab" aria-selected="true"  data-panel="p-score">Scorecard</button>
     <button role="tab" aria-selected="false" data-panel="p-feed">Decisions</button>
+    <button role="tab" aria-selected="false" data-panel="p-pending">Waiting on you<span id="pending-pill" class="count-pill" hidden>0</span></button>
     <button role="tab" aria-selected="false" data-panel="p-ledger">Ledger</button>
   </nav>
 </header>
@@ -286,6 +315,29 @@ tbody tr:hover { background: var(--plane); }
         </table>
       </div>
       <div id="feed-empty" class="empty" hidden></div>
+    </div>
+  </section>
+
+  <!-- ================= WAITING ON A HUMAN ================= -->
+  <section id="p-pending" hidden>
+    <div class="card">
+      <h2>Waiting on a human</h2>
+      <p class="sub">
+        The rulebook stopped short of deciding these and asked for a person. An
+        approval raises the ceiling for one request — it does not bypass anything.
+        The agent resubmits and every rule runs again, so a signature given now
+        cannot authorise contacting someone who opts out an hour from now.
+      </p>
+      <div class="filters">
+        <label style="font-size:12.5px;color:var(--ink-2)">
+          signing as
+          <input id="approver" class="txt" placeholder="you@merchant.in" autocomplete="email">
+        </label>
+        <span class="spacer"></span>
+        <button class="ghost" id="refresh-pending">Refresh</button>
+      </div>
+      <div id="pending-list"></div>
+      <div id="pending-empty" class="empty" hidden></div>
     </div>
   </section>
 
@@ -345,7 +397,7 @@ async function get(path) {
 /* ---------------------------------------------------------------------------
    Tabs
 --------------------------------------------------------------------------- */
-const PANELS = ["p-score", "p-feed", "p-ledger"];
+const PANELS = ["p-score", "p-feed", "p-pending", "p-ledger"];
 document.querySelectorAll('nav button').forEach((b) => {
   b.addEventListener("click", () => {
     document.querySelectorAll('nav button').forEach((o) =>
@@ -558,9 +610,9 @@ function renderFeed(entries) {
     // pointed at the default database instead of a run that happened.
     el("feed-empty").innerHTML = entries.length
       ? "Nothing matches that filter yet."
-      : 'This ledger has no entries. The server reads <code>CHECKPOST_DB</code>, ' +
-        'which defaults to an empty <code>data/checkpost.db</code> — point it at a ' +
-        'run before starting it:<br><code>$env:CHECKPOST_DB = "data/replay.db"</code>';
+      : 'This ledger has no entries. The server picks the newest run in ' +
+        '<code>data/</code> and logs which one it chose — if there is no run yet, ' +
+        'make one:<br><code>python -m harness.replay</code>';
   }
 
   el("feed-rows").innerHTML = decisions.map((e) => {
@@ -601,6 +653,106 @@ async function loadFeed() {
 el("refresh").addEventListener("click", loadFeed);
 
 /* ---------------------------------------------------------------------------
+   Waiting on a human
+
+   The only part of this page that writes. Everything else is a read-only view;
+   this is where a person actually answers the question the rulebook asked.
+--------------------------------------------------------------------------- */
+const APPROVER_KEY = "checkpost.approver";
+try { el("approver").value = localStorage.getItem(APPROVER_KEY) || ""; } catch (e) { /* private window */ }
+el("approver").addEventListener("change", () => {
+  try { localStorage.setItem(APPROVER_KEY, el("approver").value.trim()); } catch (e) { /* fine */ }
+});
+
+function renderPending(items) {
+  const pill = el("pending-pill");
+  pill.textContent = items.length;
+  pill.hidden = items.length === 0;
+
+  el("pending-empty").hidden = items.length > 0;
+  if (!items.length) {
+    el("pending-empty").textContent =
+      "Nothing is waiting. Every escalation has been signed off.";
+  }
+
+  el("pending-list").innerHTML = items.map((p) => {
+    // Show every objection, not just the first. The feed can afford to show one
+    // because it is a list; a person about to sign for this needs all of them.
+    const objections = (p.results || []).filter((r) => r.verdict !== "allow");
+    const where = [p.customer_id, p.invoice_id, p.payment_id, p.settlement_id]
+      .filter(Boolean).map(esc).join(" · ");
+    return `<div class="pend" data-id="${esc(p.request_id)}">
+      <div class="pend-head">
+        <span class="badge human">NEEDS HUMAN</span>
+        <span class="mono">${esc(p.action)}</span>
+        <span class="pend-amt">${p.amount_paise ? money(p.amount_paise) : ""}</span>
+      </div>
+      <div class="pend-meta">${esc(p.agent)} agent · ${where}</div>
+      ${objections.map((r) => `<div class="pend-rule">
+        <span class="mono" style="color:var(--muted)">${esc(r.rule_id)}</span> — ${esc(r.reason)}
+      </div>`).join("")}
+      ${p.rationale ? `<div class="pend-meta" style="margin-top:8px">
+        agent's reason: ${esc(p.rationale)}</div>` : ""}
+      <div class="pend-act">
+        <input class="txt note" placeholder="note (optional, goes in the ledger)">
+        <span class="spacer"></span>
+        <button class="ghost approve">Approve</button>
+        <button class="ghost reject">Reject</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function decide(card, verb) {
+  const approver = el("approver").value.trim();
+  if (!approver) {
+    // An unsigned row in an append-only log is worse than no row: it records
+    // that somebody approved and destroys the only useful part, who.
+    el("approver").focus();
+    el("approver").placeholder = "required — the ledger records who signed";
+    return;
+  }
+  const buttons = card.querySelectorAll("button");
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const r = await fetch(`/v1/actions/${encodeURIComponent(card.dataset.id)}/${verb}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approver, note: card.querySelector(".note").value.trim() }),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    // Approving does not run the action — the agent resubmits and the rules run
+    // again. Say so, or the operator waits for something that is not coming.
+    card.innerHTML = verb === "approve"
+      ? `<div class="pend-meta">Approved by ${esc(approver)}. The agent resubmits;
+         the rulebook runs again with the ceiling raised.</div>`
+      : `<div class="pend-meta">Rejected by ${esc(approver)}. Nothing is blacklisted —
+         a resubmission is judged exactly as this one was.</div>`;
+    loadFeed();
+    setTimeout(loadPending, 1200);
+  } catch (e) {
+    buttons.forEach((b) => { b.disabled = false; });
+    card.querySelector(".pend-act").insertAdjacentHTML("beforeend",
+      '<span style="color:var(--crit-ink);font-size:12.5px">could not record that</span>');
+  }
+}
+
+el("pending-list").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button.approve, button.reject");
+  if (btn) decide(btn.closest(".pend"), btn.classList.contains("approve") ? "approve" : "reject");
+});
+
+async function loadPending() {
+  try {
+    renderPending((await get("/v1/pending")).pending);
+  } catch (e) {
+    el("pending-empty").hidden = false;
+    el("pending-empty").textContent = "Could not reach the queue.";
+  }
+}
+el("refresh-pending").addEventListener("click", loadPending);
+
+/* ---------------------------------------------------------------------------
    The ledger
 --------------------------------------------------------------------------- */
 function renderLedger(entries) {
@@ -639,9 +791,10 @@ async function loadVerify() {
 --------------------------------------------------------------------------- */
 loadScorecard();
 loadFeed();
+loadPending();
 loadVerify();
 setInterval(() => {
-  if (el("auto").checked) { loadFeed(); loadVerify(); }
+  if (el("auto").checked) { loadFeed(); loadPending(); loadVerify(); }
 }, 3000);
 </script>
 </body>

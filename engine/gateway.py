@@ -62,6 +62,7 @@ class Gateway:
         self._refunded: dict[str, int] = {}
         self._used_keys: set[str] = set()
         self._approved_requests: set[str] = set()
+        self._pending: dict[str, dict] = {}
         self._verdict_counts: dict[str, int] = {v.value: 0 for v in Verdict}
         self._spend_paise = 0
 
@@ -76,9 +77,13 @@ class Gateway:
         for entry in self.ledger.entries():
             if entry.entry_type == "human_approval":
                 self._approved_requests.add(entry.payload["request_id"])
+                self._pending.pop(entry.payload["request_id"], None)
+            elif entry.entry_type == "human_rejection":
+                self._pending.pop(entry.payload["request_id"], None)
             elif entry.entry_type == "decision":
                 p = entry.payload
                 self._verdict_counts[p["verdict"]] = self._verdict_counts.get(p["verdict"], 0) + 1
+                self._track_pending(p)
                 if p["verdict"] != Verdict.ALLOW.value:
                     continue
                 self._spend_paise += p.get("cost_paise", 0)
@@ -92,6 +97,19 @@ class Gateway:
                     idempotency_key=p.get("idempotency_key"),
                     when=datetime.fromisoformat(p["decided_at"]),
                 )
+
+    def _track_pending(self, payload: dict) -> None:
+        """Keep the human queue in step with the decisions.
+
+        A needs_human verdict puts the request in the queue; any other verdict
+        on the same request_id takes it out. That second half is what handles an
+        approval: the agent resubmits under the same id, the rules run again,
+        and whatever they say this time resolves the queue entry.
+        """
+        if payload["verdict"] == Verdict.NEEDS_HUMAN.value:
+            self._pending[payload["request_id"]] = payload
+        else:
+            self._pending.pop(payload["request_id"], None)
 
     def _apply_allowed(
         self,
@@ -238,6 +256,7 @@ class Gateway:
             rationale=req.rationale,
         )
         self.ledger.append("decision", payload)
+        self._track_pending(payload)
 
         self._verdict_counts[verdict.value] = self._verdict_counts.get(verdict.value, 0) + 1
         if verdict is Verdict.ALLOW:
@@ -277,8 +296,26 @@ class Gateway:
         opted out this morning.
         """
         self._approved_requests.add(request_id)
+        self._pending.pop(request_id, None)
         self.ledger.append(
             "human_approval",
+            {"request_id": request_id, "approver": approver, "note": note,
+             "recorded_at": utcnow().isoformat()},
+        )
+
+    def reject(self, request_id: str, approver: str, note: str = "") -> None:
+        """Record a human refusing a needs_human request.
+
+        The mirror of approve(), and deliberately weaker: it takes the request
+        out of the queue and signs a row saying who refused it, but it does not
+        blacklist anything. A resubmission is judged exactly as it was the first
+        time. Without this the queue only ever grows — every escalation a human
+        looks at and declines would sit there for good, and a queue that cannot
+        be emptied stops being read.
+        """
+        self._pending.pop(request_id, None)
+        self.ledger.append(
+            "human_rejection",
             {"request_id": request_id, "approver": approver, "note": note,
              "recorded_at": utcnow().isoformat()},
         )
@@ -291,6 +328,15 @@ class Gateway:
     # ------------------------------------------------------------------ #
     # Reporting
     # ------------------------------------------------------------------ #
+
+    def pending(self) -> list[dict]:
+        """Every request sitting at needs_human, oldest first.
+
+        The decision payload as it was logged, which already carries the action,
+        the amount and the rule results — a human deciding needs the reason the
+        rulebook gave, not just the request.
+        """
+        return list(self._pending.values())
 
     def stats(self) -> dict:
         total = sum(self._verdict_counts.values())
