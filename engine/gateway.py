@@ -320,6 +320,25 @@ class Gateway:
              "recorded_at": utcnow().isoformat()},
         )
 
+    def resubmit(self, request_id: str, now: datetime | None = None) -> Decision:
+        """Judge a request again, from the ask exactly as it was first made.
+
+        Read back out of the ledger rather than rebuilt from the decision entry,
+        which does not carry ``evidence`` — and evidence is one of the places a
+        poisoned memo lives. A resubmission assembled from the decision would
+        sail past the prompt_injection rule that the original failed, which is
+        not a convenience feature, it is the console laundering an attack.
+
+        Nothing here bypasses anything: it calls submit() like any agent would,
+        so every rule runs again on the request as it stands now.
+        """
+        # ponytail: linear scan of the log, once per human click on a queue of
+        # tens. Index request_id in SQLite if the queue is ever worked in bulk.
+        for entry in reversed(self.ledger.entries("request")):
+            if entry.payload["request_id"] == request_id:
+                return self.submit(ActionRequest(**entry.payload), now=now)
+        raise KeyError(request_id)
+
     def report_outcome(self, outcome: Outcome) -> None:
         """What actually happened after an allowed action. The scorecard is
         computed from these entries, not from what the agents intended."""

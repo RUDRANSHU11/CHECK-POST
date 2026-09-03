@@ -205,6 +205,21 @@ def reject_action(request_id: str, body: ApprovalIn) -> dict:
     return {"request_id": request_id, "rejected_by": body.approver}
 
 
+@app.post("/v1/actions/{request_id}/resubmit", response_model=Decision)
+def resubmit_action(request_id: str) -> Decision:
+    """Run an approved request back through the rulebook.
+
+    Approving does not execute anything — it raises a ceiling and waits for the
+    agent to come back. This is the operator saying "come back now", and it is
+    still a full submit(): the rules all run again, and a request approved this
+    morning can still be denied this afternoon.
+    """
+    try:
+        return get_gateway().resubmit(request_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"no request {request_id} in the ledger") from exc
+
+
 @app.post("/v1/outcomes")
 def report_outcome(outcome: Outcome) -> dict:
     get_gateway().report_outcome(outcome)
