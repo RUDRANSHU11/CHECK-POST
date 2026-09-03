@@ -468,6 +468,28 @@ Always through `.venv\Scripts\python.exe`. The machine's bare `python` is the
 Windows Store shim and has none of this project's dependencies, so plain
 `python -m uvicorn ...` fails with `No module named 'uvicorn'`.
 
+### First time, from a clean clone
+
+`.venv/`, `data/*.json` and `.env` are all gitignored — a clone has none of
+them, and every command below assumes all three:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy .env.example .env      # optional: only the Gemini planner reads it
+```
+
+The tests need nothing else — they build their own data in tmp directories:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q        # 209 tests, ~9s
+```
+
+`python -m pytest`, not bare `pytest`: the module form puts the repo root on
+`sys.path`, so `import engine` resolves without installing the package.
+
+### The demo itself
+
 ```powershell
 .venv\Scripts\python.exe -m harness.generate   # once — the synthetic month
 .venv\Scripts\python.exe -m harness.replay     # the scorecard, ~20s
