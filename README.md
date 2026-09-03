@@ -2,9 +2,17 @@
 
 **A safety checkpoint that sits between an AI agent and a company's money.**
 
+[![Tests](https://github.com/RUDRANSHU11/CHECK-POST/actions/workflows/tests.yml/badge.svg)](https://github.com/RUDRANSHU11/CHECK-POST/actions/workflows/tests.yml)
+[![Pylint](https://github.com/RUDRANSHU11/CHECK-POST/actions/workflows/pylint.yml/badge.svg)](https://github.com/RUDRANSHU11/CHECK-POST/actions/workflows/pylint.yml)
+
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-> Name is a placeholder. Swap it for whatever the team likes.
+**16 rules · 209 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
+On a synthetic month: **₹12,82,464 net value created**, measured against a
+holdout and reported with a confidence interval.
+
+Start with [the scorecard](#the-scorecard) — the one artifact the whole project
+produces — or [run it yourself](#running-the-demo) in four commands.
 
 ---
 
@@ -140,6 +148,11 @@ All commerce actions are explainable, bounded and gated — which is Track 01's 
 The recovery agent is the **hero** of the demo. The other two are proof that the layer
 is general, not built for one use case.
 
+None of them is trusted with its own numbers. When the risk scorer submits a
+block, the score it claims travels as *evidence* — the gateway recomputes it from
+the shared signal model before any rule reads it. An agent that could assert its
+own risk score could justify any block it liked.
+
 ---
 
 ## What the judges see
@@ -246,14 +259,19 @@ If the net number came out negative, we show that too. That's the point.
 
 ## Stack
 
-- **Backend** — FastAPI, Python
-- **Agents** — Gemini with tool calling
+- **Backend** — FastAPI, Python 3.12
+- **Agents** — a deterministic rule planner by default, Gemini with tool calling
+  behind `GEMINI_API_KEY`. Every number in this README comes from the rule
+  planner; that is what makes the run reproducible
 - **Frontend** — one static page in `web/`, served by the same FastAPI process.
   No build step, no node, no CORS, no second port. Deliberate: the dashboard is
   three read-only views over endpoints that already existed, and a framework
   would have bought nothing but a way for demo day to go wrong
-- **Storage** — SQLite or Postgres, whichever is faster to stand up
-- **Data** — synthetic generator; Razorpay test-mode APIs where they fit
+- **Storage** — SQLite. One file, no server to stand up, and the append-only
+  triggers that make the ledger tamper-evident are plain SQL
+- **Data** — synthetic generator, seeded and reproducible. No Razorpay call is
+  made and no real money moves — the test-mode keys in `.env.example` are read
+  by nothing
 
 ---
 
@@ -327,8 +345,13 @@ checkpost/
 - [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
-- [ ] Demo video
+- [x] Gemini planner driven against the installed SDK types — everything but
+      the network hop is now covered, and `python -m agents.recovery` is that hop
+- [x] `.env` actually read; `engine.ledger verify` actually honours `CHECKPOST_DB`
+- [x] Setup documented from a clean clone, verified against one
+- [x] Interface run end to end — API, dashboard, ledger chain, the injection demo
 - [x] README polish, architecture diagram
+- [ ] Demo video
 - [ ] Dry run the pitch three times
 
 **Sept 5 — submit early in the day, not at midnight.**
@@ -364,71 +387,65 @@ our test cases instead of four separate projects.
 
 | Name | Owns |
 |---|---|
-| Rudranshu Pandey | |
-| | |
-| | |
+| Rudranshu Pandey | Engine, agents, harness, dashboard |
 
 ---
 
 ## Status
 
-**Days 1–5 complete**, day 6 under way. 209 tests green, red team 18/18,
-pylint clean, CI green on every push.
+**All six build days are done; submission is Sept 5.** The layer is finished:
+all three agents run through it, the holdout experiment works, and every number
+above comes from a single reproducible command. 209 tests green, red team 18/18,
+pylint clean, CI green on every push. Remaining: the demo video and three pitch
+dry runs.
 
-The layer is finished. All three agents run through it, the holdout experiment
-works, and the numbers above come from a single reproducible command.
+### What is proven, and what isn't
 
-What day 4 added, and what each thing is for:
-
-| Built | Why it matters |
+| Part | Where it stands |
 |---|---|
-| **Risk scorer** | Six named signals, additive weights, no fitted model. The gateway **recomputes the score itself** — the agent's claim travels as evidence and is never trusted. An agent that could assert its own risk score could justify any block it liked. |
-| **Reconciler** | Four named exception classes, plus a sweep for captured payments no batch ever mentions. It found 83 of those, exactly matching ground truth. |
-| **Replay harness** | 80/20 treated vs holdout, split by hash so anyone can recompute it. Reports a bootstrap confidence interval alongside the point estimate. |
-| **Red team** | 18 attacks, run as a CI gate and as a demo. Two of them were *our* mistakes, not the engine's — both are written up in `decisions.md`. |
-| **3 new rules** | block ceiling, risk evidence, settlement discrepancy — 16 total. |
+| Policy engine, 16 rules | one test each, plus 18 red-team attacks asserted against the rule that must stop them |
+| Economics gate | expected value, attempt decay, staleness, 20% budget cap |
+| Ledger | 6,097 entries, hash chain verified by `engine.ledger verify` and by the API, independently |
+| Replay + holdout | reproducible byte for byte across runs; estimator lands within 10% of ground truth on the full month |
+| API + dashboard | run end to end — every field the dashboard reads is served, no external requests, no 5xx |
+| **Gemini planner** | **the one HTTP call is still unproven.** Everything up to it is covered |
 
-**Three defects this work surfaced,** all fixed:
+That last row is the honest one. Six tests drive the planner against the
+**installed google-genai types** rather than a hand-rolled mock: a real
+`GenerateContentResponse` parses into an action, the tool schema is one the SDK
+accepts, a planner that raises falls back instead of taking the run down, an
+action the enum has never heard of falls back rather than crashing, the memo
+reaches the model unaltered, and — the one that matters — a planner proposing a
+₹50,000 discount on a ₹9,000 invoice is sent to a human by `discount_ceiling`.
 
-- The recovery agent re-escalated the same invoice every day at ₹50 a time.
-  Invisible over day 3's five-day runs; on course to be the largest cost line in
-  a 31-day one.
-- The uplift estimator was reported as a bare point estimate. On the full month
-  it lands within 10% of truth; on a 500-invoice fixture the *same code* was 88%
-  off. It now carries a 95% interval, and the test asserts the true value falls
-  inside the interval rather than near the estimate.
-- The simulated analyst was seeded on a `uuid4`, so the fraud figures moved by
-  nearly a lakh between two runs of the same seed. The scorecard is the
-  deliverable; a scorecard that is not reproducible is not evidence.
-
-**The largest risk left** is still the Gemini planner: no live key has ever
-round-tripped, and every number above comes from the deterministic planner. That
-part is deliberate — it is what makes the run reproducible — but "we wrote an
-LLM agent and never ran it" is not a sentence to say to a judge.
-
-Day 6 took everything except the network hop off that list. Six tests drive the
-planner against the **installed google-genai types** rather than a hand-rolled
-mock: a real `GenerateContentResponse` parses into an action, the tool schema is
-one the SDK accepts, a planner that raises falls back instead of taking the run
-down, an action the enum has never heard of falls back rather than crashing, the
-memo reaches the model unaltered, and — the one that matters — a planner that
-proposes a ₹50,000 discount on a ₹9,000 invoice is sent to a human by
-`discount_ceiling`. What remains unproven is one HTTP call.
-
-`python -m agents.recovery` is that call, on one real invoice, in five seconds:
+What remains is one network hop, and `python -m agents.recovery` is that hop —
+one real invoice, five seconds:
 
 ```powershell
 .venv\Scripts\python.exe -m agents.recovery
 ```
 
 It prints which planner was built, the proposal, and whether the call actually
-round-tripped — a fallback is invisible in a 964-invoice run, because every
+round-tripped. A silent fallback is invisible across 964 invoices, because every
 proposal still looks reasonable coming from the rule planner. It exits non-zero
 if the key is missing or the call failed.
 
-**The defects day 6 surfaced,** all fixed:
+### Six defects this work surfaced, all fixed
 
-- The replay was not reproducible. Two runs of the same command on the same
+The list is here on purpose. A project whose whole claim is *honest measurement*
+does not get to hide the times its own measurements were wrong.
+
+- **The recovery agent re-escalated the same invoice every day** at ₹50 a time.
+  Invisible over day 3's five-day runs; on course to be the largest cost line in
+  a 31-day one.
+- **The uplift estimator was reported as a bare point estimate.** On the full month
+  it lands within 10% of truth; on a 500-invoice fixture the *same code* was 88%
+  off. It now carries a 95% interval, and the test asserts the true value falls
+  inside the interval rather than near the estimate.
+- **The simulated analyst was seeded on a `uuid4`,** so the fraud figures moved by
+  nearly a lakh between two runs of the same seed. The scorecard is the
+  deliverable; a scorecard that is not reproducible is not evidence.
+- **The replay was not reproducible.** Two runs of the same command on the same
   dataset disagreed — 2,445 requests against 2,447, and a confidence interval
   that moved by tens of thousands of rupees — because two places iterated a
   *set* of invoice ids. Python salts string hashing per process, so the recovery
@@ -439,7 +456,6 @@ if the key is missing or the call failed.
   came back twice, in the ordering rather than the split. The numbers in this
   README are from the fixed run, and two consecutive runs now agree byte for
   byte apart from the ledger's timestamps.
-
 - **Nothing ever read `.env`.** python-dotenv has been a dependency since day 1
   and `.env.example` documents `GEMINI_API_KEY`, but no code called
   `load_dotenv()`, so a key written into `.env` was ignored and the only symptom
@@ -448,13 +464,10 @@ if the key is missing or the call failed.
   finds any `.env` at all. On this machine that default found an unrelated
   project's file two directories up and handed Checkpost its expired key: the
   probe reported `planner: gemini` and then failed on every single invoice.
-
 - **`python -m engine.ledger verify` ignored `CHECKPOST_DB`** and always opened
   the empty default database, so it printed `ledger intact — 0 entries verified`
   one line after the docs tell you to point the variable at a real run. The most
   convincing wrong answer that tool can give.
-
-Next: the video and the pitch.
 
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
