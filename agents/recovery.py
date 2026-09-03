@@ -199,11 +199,13 @@ ACTION_TOOL = {
 class GeminiPlanner:
     """LLM planner. Falls back to RulePlanner on any failure.
 
-    NOT VERIFIED AGAINST A LIVE KEY — the only key available on this machine is
-    the malformed one left over from earlier projects (50 chars, starts "Ab8R";
-    real AI Studio keys are 39 and start "AIza"). The request shape follows the
-    google-genai 2.x tool-calling API but has never round-tripped. Treat the
-    first live run as debugging, not as a demo.
+    Verified against a live key on 2026-09-03: the tool call round-trips and
+    parses into an action, and `harness.replay --llm` runs the month through it.
+    This docstring used to say the opposite, and to blame the key on this machine
+    for being 52 characters and starting "AQ.Ab8R" rather than 39 and "AIza".
+    That key works. The shape rule was wrong, and believing it cost a day —
+    hence `python -m agents.recovery`, which answers the question in five
+    seconds instead of by inspection.
     """
 
     name = "gemini"
@@ -218,12 +220,20 @@ class GeminiPlanner:
         #: 964-invoice run — every proposal still looks reasonable, because it
         #: came from the rule planner. The probe below reads this.
         self.last_error: Exception | None = None
+        #: How many invoices were planned, and how many of those the model did
+        #: not actually decide. `last_error` answers "did the last one fail?";
+        #: a run needs "how many of the 964 failed?", because the free tier caps
+        #: gemini-2.5-flash at 20 requests a day and call 21 onwards is the rule
+        #: planner wearing the name `gemini` on the scorecard.
+        self.calls = 0
+        self.fallbacks = 0
 
     def plan(
         self, invoice: Invoice, payments: list[Payment], tried: int, now: datetime
     ) -> tuple[ActionType, int, str] | None:
         from google.genai import types
 
+        self.calls += 1
         facts = {
             "invoice_id": invoice.invoice_id,
             "amount_paise": invoice.amount_paise,
@@ -267,8 +277,14 @@ class GeminiPlanner:
         # A planner must never take the run down, whatever the SDK raises.
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.last_error = exc
-            print(f"  [gemini unavailable: {type(exc).__name__}: {exc}] falling back to rules")
+            # Truncated: a 429 from this API carries two kilobytes of quota JSON,
+            # and 964 of those bury the scorecard they were printed above.
+            msg = f"  [gemini unavailable: {type(exc).__name__}: {exc}]"
+            print(f"{msg[:200]} falling back to rules")
 
+        # Also reached when the response parsed but contained no tool call, which
+        # raises nothing and would otherwise be the one fallback nobody counts.
+        self.fallbacks += 1
         return self._fallback.plan(invoice, payments, tried, now)
 
 
