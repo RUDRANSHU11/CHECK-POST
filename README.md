@@ -528,8 +528,8 @@ Windows Store shim and has none of this project's dependencies, so plain
 
 ### First time, from a clean clone
 
-`.venv/`, `data/*.json` and `.env` are all gitignored — a clone has none of
-them, and every command below assumes all three:
+`.venv/` and `.env` are gitignored — a clone has neither, and every command
+below assumes both:
 
 ```powershell
 python -m venv .venv
@@ -547,6 +547,11 @@ The tests need nothing else — they build their own data in tmp directories:
 `sys.path`, so `import engine` resolves without installing the package.
 
 ### The demo itself
+
+`data/dataset.json`, `data/replay.db` and `out/scorecard.json` *are* committed,
+because the deployment serves them and Vercel builds from the repo. The two
+commands below rewrite all three from the recorded seed, so a clone can either
+trust them or regenerate and diff.
 
 ```powershell
 .venv\Scripts\python.exe -m harness.generate   # once — the synthetic month

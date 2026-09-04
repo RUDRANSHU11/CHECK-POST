@@ -16,3 +16,13 @@ web/.next/
 # so committing several MB of JSON would add nothing a command cannot rebuild.
 data/*.json
 .vercel
+
+# ...except the three artifacts the deployment serves. Vercel builds from the
+# repo, so whatever is not committed is absent at runtime: without these the
+# function boots straight into "data/dataset.json missing" and every route
+# 500s. They are still reproducible — `generate` then `replay` rewrites all
+# three from the recorded seed — but "a command can rebuild it" stopped being
+# enough once a push became a deploy.
+!data/dataset.json
+!data/replay.db
+!out/scorecard.json
