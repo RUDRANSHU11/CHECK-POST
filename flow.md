@@ -29,7 +29,7 @@ the layer is general. The depth is in the layer, not in them.
 | pydantic 2 | every domain type in `engine/schema.py` | validation at the edge; `extra="forbid"` turns a typo'd agent field into a 422 instead of a value that silently never reaches a rule |
 | FastAPI + uvicorn | `engine/api.py` | thin HTTP layer, free OpenAPI docs at `/docs` for the demo |
 | SQLite | the ledger, `data/checkpost.db` | zero setup, and its triggers enforce append-only at the storage layer |
-| pytest | `tests/` | 227 tests, all green |
+| pytest | `tests/` | 229 tests, all green |
 | google-genai 2.20 | `agents/recovery.py` | LLM planner. Tested against the SDK's own types, and round-tripped against a live key on 3 Sept. `python -m agents.recovery` re-proves it in five seconds |
 | python-dotenv | `engine/__init__.py` | reads the repo's own `.env`, by explicit path. The default `load_dotenv()` walks up the tree and will happily load another project's file |
 | one static HTML file | `web/index.html` | dashboard, served by the API process itself. No build step and no CDN: a page that needs a toolchain or the network to render is a page that fails on demo day |
@@ -62,7 +62,7 @@ checkpost/
 │   ├── batch.py            day-3 runner, no holdout — superseded by replay.py
 │   ├── replay.py           80/20 treated vs holdout, and the scorecard
 │   └── redteam.py          18 attacks, each expecting a named rule to stop it
-├── tests/                  227 tests
+├── tests/                  229 tests
 ├── data/
 │   ├── dataset.json        what agents may read
 │   ├── ground_truth.json   what actually would have happened — agents must not read
@@ -384,7 +384,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 ## 8. Current state
 
-**Working, tested (227 tests green, red team 18/18, pylint clean):**
+**Working, tested (229 tests green, red team 18/18, pylint clean):**
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,

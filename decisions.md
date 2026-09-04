@@ -806,3 +806,51 @@ machine it is a way to spend someone else's quota.
 the three agents and the ledger CLI all import `engine`, and a config that
 depends on which module you happened to run is a config that will be wrong
 exactly once, on the day.
+
+
+## 2026-09-04 — One lock guards the ledger connection, and the comment is now true
+
+**Decision:** every method on `Ledger` that touches `self.conn` takes a
+`threading.RLock` first. `_iter_rows` fetches under it and returns an iterator
+over the result, rather than streaming a live cursor into the caller's loop.
+
+**What was there before:** a comment on the `check_same_thread=False` line
+saying writes were "serialised by the connection lock below". There was no lock
+below. The connection was shared, unguarded, across the threadpool that FastAPI
+runs sync endpoints on — and the dashboard polls `/v1/ledger`,
+`/v1/ledger/verify` and `/v1/pending` on a timer, so two reads overlapping was
+the normal case rather than an unlucky one.
+
+**Three symptoms, and only two of them are honest failures.** `InterfaceError:
+bad parameter or other API misuse` and `IndexError` out of `_row_to_entry` are
+loud: a 500, a red line in the dashboard, obvious. The third is
+`json.loads(None)` — a row whose columns came back misaligned. That one says the
+read returned *bytes that were never in the table*. A misaligned read inside
+`verify()` can report a content break on a chain nobody touched, and this
+project's entire claim rests on `verify()` meaning something. A ledger that
+cries tamper at random is worse than no ledger, because it teaches the person
+watching to ignore it.
+
+**Writes were worse than reads.** Eight threads appending ten entries each: 41
+of the 80 died on `UNIQUE constraint failed: ledger.seq`, because two threads
+read the same head and computed the same next sequence number. The chain that
+survived verified `ok=True` — internally consistent, correctly linked, and
+missing 63 of its 80 entries. Nothing about the surviving rows is wrong; the
+rows that should have been beside them are simply gone. `verify()` cannot see
+that, which is why the test asserts the *count*, not just the verdict.
+
+**Why a lock and not a connection per thread:** a thread-local connection is the
+better answer under real load and the wrong answer here. Appending is a
+read-then-write — read the head, hash against it, insert — and that is only
+atomic if one writer holds the table across both. Separate connections would
+need a transaction discipline to get the same guarantee, which is more code and
+more to explain, for throughput this project will never need. The ceiling is
+stated rather than hidden: one lock means one writer at a time, and at a few
+thousand entries a month that is not the constraint.
+
+**Why no test caught it:** the suite drives the API through `TestClient`, which
+issues requests one at a time. 227 tests, and not one of them had ever had two
+reads in flight at once. The two added here were written against a no-op lock
+before being trusted — at sixty rows they pass with or without the fix, because
+each read finishes before the next thread starts. They fail every run at eight
+hundred.
