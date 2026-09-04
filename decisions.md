@@ -482,7 +482,7 @@ industry figures, which is why the constant block says so in the file.
 
 The same run also needed more batches: one settlement a day gave the month 30
 of them, so days are split into two to four batches as an acquirer actually pays
-out. 132 settlements, 103 clean, 29 carrying an injected error.
+out. 138 settlements, 102 clean, 36 carrying an injected error.
 
 ---
 
