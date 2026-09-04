@@ -36,6 +36,9 @@ if _bundled.exists() and not _writable.exists():
     shutil.copyfile(_bundled, _writable)
 os.environ.setdefault("CHECKPOST_DB", str(_writable))
 
-from engine.api import app  # noqa: E402  # must follow the env setup above
+# Deliberately not at the top: every line above sets an environment variable
+# that engine.api reads at import time, so hoisting this import would restore
+# the relative-path defaults it exists to override.
+from engine.api import app  # pylint: disable=wrong-import-position
 
 __all__ = ["app"]
