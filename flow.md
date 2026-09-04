@@ -388,7 +388,7 @@ Endpoints: `POST /v1/actions` · `POST /v1/actions/{id}/approve` ·
 
 - Event schema, price list, money and time handling
 - Synthetic month: 1,200 customers, 3,400 invoices, 5,000 payments,
-  132 settlement batches, ₹76,08,874 outstanding, 79 opted-out customers,
+  138 settlement batches, ₹76,02,478 outstanding, 78 opted-out customers,
   23 poisoned memos, 622 would-pay-anyway vs 600 pay-only-if-chased,
   23 fraud rings, 83 captured payments the bank never settled
 - Hash-chained ledger with triggers and a three-way `verify()`
