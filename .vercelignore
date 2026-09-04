@@ -1,0 +1,19 @@
+# Vercel uploads from disk, so anything not excluded here ships — including
+# files .gitignore hides. The .env line is the one that matters: it holds a
+# live API key.
+.env
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+.github/
+
+# Datasets the server does not read. data/dataset.json and data/replay.db are
+# deliberately NOT excluded: the app refuses to boot without the first and
+# serves an empty dashboard without the second.
+data/batch.db
+data/checkpost.db
+data/ground_truth.json
+out/*.md
