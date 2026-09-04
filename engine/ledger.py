@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -108,8 +109,20 @@ class Ledger:
     def __init__(self, db_path: str | Path = "data/checkpost.db") -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: FastAPI serves requests on a threadpool, and
-        # writes are serialised by the connection lock below anyway.
+        #: Every touch of `conn` below is taken under this. check_same_thread is
+        #: off because FastAPI serves sync endpoints on a threadpool, and that
+        #: hands one connection to several threads at once — which sqlite3
+        #: permits and does not make safe. The dashboard polls /v1/ledger,
+        #: /v1/ledger/verify and /v1/pending together, so the overlap is the
+        #: normal case, not an edge one. Unserialised it fails three ways:
+        #: InterfaceError, IndexError out of _row_to_entry, and — the one that
+        #: matters — json.loads(None) from a row whose columns came back
+        #: misaligned. A read that returns the wrong bytes could fail verify()
+        #: on an intact chain, which is a false tamper alarm in the one place
+        #: this project asks to be believed.
+        #:
+        #: This comment used to claim the lock existed. It did not.
+        self._lock = threading.RLock()
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
@@ -122,18 +135,23 @@ class Ledger:
         payload_text = canonical(payload)
         recorded_at = utcnow().isoformat()
 
-        cur = self.conn.cursor()
-        row = cur.execute("SELECT seq, entry_hash FROM ledger ORDER BY seq DESC LIMIT 1").fetchone()
-        prev_hash = row["entry_hash"] if row else GENESIS_HASH
-        seq = (row["seq"] + 1) if row else 1
+        # Read-then-write: the lock spans both, or two appends can read the same
+        # head and chain themselves to the same predecessor.
+        with self._lock:
+            cur = self.conn.cursor()
+            row = cur.execute(
+                "SELECT seq, entry_hash FROM ledger ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = row["entry_hash"] if row else GENESIS_HASH
+            seq = (row["seq"] + 1) if row else 1
 
-        entry_hash = compute_hash(seq, entry_type, payload_text, recorded_at, prev_hash)
-        cur.execute(
-            "INSERT INTO ledger (seq, entry_type, payload, recorded_at, prev_hash, entry_hash)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (seq, entry_type, payload_text, recorded_at, prev_hash, entry_hash),
-        )
-        self.conn.commit()
+            entry_hash = compute_hash(seq, entry_type, payload_text, recorded_at, prev_hash)
+            cur.execute(
+                "INSERT INTO ledger (seq, entry_type, payload, recorded_at, prev_hash, entry_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (seq, entry_type, payload_text, recorded_at, prev_hash, entry_hash),
+            )
+            self.conn.commit()
 
         return LedgerEntry(
             seq=seq,
@@ -147,14 +165,16 @@ class Ledger:
     # -- reading ---------------------------------------------------------- #
 
     def __len__(self) -> int:
-        return int(self.conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"])
+        with self._lock:
+            return int(self.conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"])
 
     def head(self) -> str:
         """Hash of the newest entry — the single value that commits to the whole
         history. Print it at the end of a demo run and anyone can re-verify."""
-        row = self.conn.execute(
-            "SELECT entry_hash FROM ledger ORDER BY seq DESC LIMIT 1"
-        ).fetchone()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT entry_hash FROM ledger ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
         return row["entry_hash"] if row else GENESIS_HASH
 
     def entries(self, entry_type: str | None = None, limit: int | None = None) -> list[LedgerEntry]:
@@ -167,10 +187,17 @@ class Ledger:
         if limit:
             sql += " LIMIT ?"
             args.append(limit)
-        return [self._row_to_entry(r) for r in self.conn.execute(sql, args)]
+        with self._lock:
+            return [self._row_to_entry(r) for r in self.conn.execute(sql, args)]
 
     def _iter_rows(self) -> Iterator[sqlite3.Row]:
-        yield from self.conn.execute("SELECT * FROM ledger ORDER BY seq")
+        # Fetched under the lock and then iterated, rather than streamed: a bare
+        # generator holds the cursor open across the caller's work, and verify()
+        # hashes every row as it goes. That is the window another thread's read
+        # walked into.
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM ledger ORDER BY seq").fetchall()
+        return iter(rows)
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> LedgerEntry:
@@ -238,7 +265,8 @@ class Ledger:
         return VerifyResult(True, checked)
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
 
 # --------------------------------------------------------------------------- #
