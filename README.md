@@ -382,6 +382,12 @@ above comes from a single reproducible command. 229 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
+Live at <https://checkpost-chi.vercel.app> since **Sept 4**, rebuilt on every
+push to `main`. The deployed `/v1/ledger/verify` returns the same 6,097 entries
+and the same head hash as a local run — the site serves the committed ledger
+rather than a second copy of it. Approvals made there do not survive a cold
+start; [Running the demo](#running-the-demo) says why.
+
 Re-verified end to end on **Sept 4**, from the seed rather than from the
 leftovers of the last run — `generate`, `replay`, `redteam`, `ledger verify`,
 `pytest`, `pylint`. The scorecard came back with the same 2,445 requests, the
