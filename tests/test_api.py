@@ -4,6 +4,7 @@ rather than re-testing rules that test_policy.py already covers."""
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 
 import pytest
 from fastapi.testclient import TestClient
@@ -139,6 +140,28 @@ def test_the_dashboard_needs_no_network_to_render(client):
     assert "http://" not in body.replace("http://127.0.0.1", "")
     assert "https://" not in body
     assert "<script src=" not in body and "<link rel=\"stylesheet\"" not in body
+
+
+def test_favicon_is_served_and_is_a_real_svg(client):
+    """Every page this process serves gets a tab icon, so nothing logs a 404.
+
+    /docs matters as much as the dashboard here: its HTML is FastAPI's, we
+    cannot put a <link> in it, and a red line in the network tab during the
+    demo invites a question about something that is not a bug. Parsing the body
+    rather than eyeballing the status code, because a malformed SVG still
+    returns 200 and simply shows no icon.
+    """
+    r = client.get("/favicon.ico")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/svg+xml")
+    root = ET.fromstring(r.text)
+    assert root.tag == "{http://www.w3.org/2000/svg}svg"
+    assert root.findall("{http://www.w3.org/2000/svg}path")
+
+
+def test_favicon_is_not_in_the_public_schema(client):
+    """It answers a browser, not a caller. /docs lists the money endpoints."""
+    assert "/favicon.ico" not in client.get("/openapi.json").json()["paths"]
 
 
 def test_scorecard_says_what_to_run_when_there_is_none(client, tmp_path, monkeypatch):
