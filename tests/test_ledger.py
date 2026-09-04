@@ -4,6 +4,7 @@ try to rewrite it quietly."""
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 
@@ -162,3 +163,68 @@ def test_field_separator_cannot_be_forged():
     a = compute_hash(1, "decision", "x", "t", GENESIS_HASH)
     b = compute_hash(1, "decision|x", "", "t", GENESIS_HASH)
     assert a != b
+
+
+def test_concurrent_readers_do_not_corrupt_each_other(ledger):
+    """One connection, several threads — the shape FastAPI actually serves.
+
+    Sync endpoints run on a threadpool, so the dashboard polling /v1/ledger,
+    /v1/ledger/verify and /v1/pending hands the same connection to several
+    threads at once. Unserialised that fails three ways: InterfaceError,
+    IndexError inside _row_to_entry, and json.loads(None) from a row whose
+    columns came back misaligned. The last is the reason this is a test and not
+    a shrug — a read that returns the wrong bytes can fail verify() on an intact
+    chain, and a false tamper alarm is the worst lie this project can tell.
+
+    The rest of the suite misses it because TestClient drives requests one at a
+    time, so nothing before this ever overlapped two reads.
+    """
+    # 800 rows, not a handful: the reads have to overlap in time to collide, and
+    # at 60 rows each one finishes before the next thread starts. Checked by
+    # running this against a no-op lock — at 60 it passes either way, which
+    # would have made it decoration. It fails every run at 800.
+    fill(ledger, 800)
+    errors: list[Exception] = []
+    start = threading.Barrier(8)
+
+    def hammer() -> None:
+        start.wait()  # release every thread on the same instant
+        for _ in range(10):
+            try:
+                assert len(ledger.entries(limit=800)) == 800
+                assert ledger.verify().ok
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                errors.append(exc)
+
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"{len(errors)} concurrent failures, first: {errors[0]!r}"
+
+
+def test_concurrent_appends_each_get_their_own_link(ledger):
+    """Two appends must not read the same head and chain to the same parent.
+
+    The read-then-write in append() is only atomic because the lock spans both.
+    A chain with a duplicate seq or a forked prev_hash still *looks* fine entry
+    by entry; verify() is what catches it, so that is what this asserts.
+    """
+    start = threading.Barrier(8)
+
+    def writer(n: int) -> None:
+        start.wait()
+        for i in range(10):
+            ledger.append("decision", {"request_id": f"rq_{n}_{i}"})
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    result = ledger.verify()
+    assert result.ok, result.detail
+    assert result.entries_checked == 80
