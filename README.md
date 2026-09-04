@@ -11,6 +11,8 @@ Razorpay Buildathon 2026 — Track 05, Open Track.
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
+**Live: <https://checkpost-chi.vercel.app>** — no clone, no setup.
+
 Start with [the scorecard](#the-scorecard) — the one artifact the whole project
 produces — or [run it yourself](#running-the-demo) in four commands.
 
@@ -502,6 +504,23 @@ See `flow.md` for how the codebase fits together and `decisions.md` for why.
 ## Running the demo
 
 One command. The dashboard, the API and the docs come from the same process.
+
+### Or open the deployed one
+
+<https://checkpost-chi.vercel.app> is this same `engine.api:app` on Vercel,
+serving the committed replay run — dashboard, API and `/docs`, nothing to
+install. `main.py` is the entrypoint; it changes two things and no logic.
+
+Worth being precise about the one that is visible. Vercel's filesystem is
+read-only apart from the temp directory, and `Ledger.__init__` opens SQLite
+read-write before any endpoint is reached, so `main.py` copies the ledger out
+at cold start. Every read is correct and `/v1/ledger/verify` returns the same
+6,097 entries and the same head hash as local — but an approval made on the
+deployed site lives in that one instance and is gone at the next cold start.
+A real queue would need `CHECKPOST_DB` pointed at hosted Postgres. For a public
+read-only view of a finished run, ephemeral is the right trade.
+
+Locally, none of that applies:
 
 Always through `.venv\Scripts\python.exe`. The machine's bare `python` is the
 Windows Store shim and has none of this project's dependencies, so plain
