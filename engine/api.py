@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from engine import policy
@@ -136,6 +136,33 @@ def dashboard() -> FileResponse:
     if not page.exists():
         raise HTTPException(404, f"{page} missing")
     return FileResponse(page, media_type="text/html")
+
+
+#: A shield with a check in it, in the dashboard's own accent blue. Inline
+#: rather than a file in web/, because it is two paths of markup and a binary
+#: .ico in the repo is a thing you cannot edit without a tool.
+FAVICON = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>"
+    "<path d='M8 1 14 3.4V8c0 3.4-2.4 5.9-6 7-3.6-1.1-6-3.6-6-7V3.4z'"
+    " fill='#2a78d6'/>"
+    "<path d='M4.8 8.2 7 10.4 11.2 6' fill='none' stroke='#fff'"
+    " stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/>"
+    "</svg>"
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """The tab icon, served for every page this process hands out.
+
+    A browser asks for this unprompted, so without it the dashboard *and*
+    /docs each log a 404 — a red line in the network tab during the demo that
+    explains nothing and invites a question about something that is not a bug.
+    Serving it here rather than linking it from index.html is what covers
+    /docs too, whose HTML is FastAPI's and not ours to edit. Chrome and Firefox
+    both honour the content type over the .ico extension.
+    """
+    return Response(FAVICON, media_type="image/svg+xml")
 
 
 @app.get("/health")

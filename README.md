@@ -7,7 +7,7 @@
 
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-**16 rules · 225 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
+**16 rules · 227 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
@@ -325,7 +325,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 225 tests
+├── tests/                # 227 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -367,7 +367,7 @@ checkpost/
 **Day 5 — Sept 2**
 - [x] Dashboard: scorecard, live decision feed, ledger viewer
 - [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 225 tests, and the red team on every push
+- [x] CI that actually runs: lint, 227 tests, and the red team on every push
 - [x] Fix whatever breaks
 
 **Day 6 — Sept 3**
@@ -388,7 +388,7 @@ checkpost/
 **Day 7 — Sept 4**
 - [x] Full verification pass, nothing reused from the previous run: regenerate
       the month from the recorded seed, replay it, run the red team, verify the
-      chain — plus 225 tests and pylint. Every number published above came back
+      chain — plus 227 tests and pylint. Every number published above came back
       identical; the ledger head is the only thing that moves between runs,
       because it hashes timestamps
 - [x] Deleted the last copy of the key-shape claim. Day 6 removed it from
@@ -440,7 +440,7 @@ our test cases instead of four separate projects.
 
 **Every build day is done; submission is Sept 5.** The layer is finished: all
 three agents run through it, the holdout experiment works, and every number
-above comes from a single reproducible command. 225 tests green, red team 18/18,
+above comes from a single reproducible command. 227 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
@@ -569,7 +569,7 @@ copy .env.example .env      # optional: only the Gemini planner reads it
 The tests need nothing else — they build their own data in tmp directories:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q        # 225 tests, ~9s
+.venv\Scripts\python.exe -m pytest -q        # 227 tests, ~9s
 ```
 
 `python -m pytest`, not bare `pytest`: the module form puts the repo root on
