@@ -7,7 +7,7 @@
 
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-**16 rules · 227 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
+**16 rules · 229 tests · 18/18 red team · 6,097 ledger entries, chain intact.**
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
@@ -325,7 +325,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 227 tests
+├── tests/                # 229 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -334,70 +334,6 @@ checkpost/
 ├── flow.md               # how it fits together
 ├── decisions.md          # why
 └── README.md
-```
-
----
-
-## Build plan
-
-**Day 1 — Aug 30**
-- [x] Lock the event schema (payment, invoice, customer, action, decision)
-- [x] Synthetic data generator producing a believable month
-- [x] Repo scaffold — Python half runs and is tested; `web/` still empty (day 5)
-
-**Day 2 — Aug 31**
-- [x] Policy engine — 13 rules, one test each
-- [x] Ledger with hash chaining, append-only triggers, and `python -m engine.ledger verify`
-- [x] Gateway API — agents can request, get a verdict, get logged
-
-**Day 3 — Sept 1**
-- [x] Economics gate — expected value, attempt decay, staleness, 20% budget cap
-- [x] Recovery agent end to end — deterministic planner; Gemini planner written but unrun
-- [x] First numbers on screen (`python -m harness.batch`)
-
-**Day 4 — Sept 1** *(a day ahead of plan)*
-- [x] Risk scorer — shared signal model the gateway recomputes; the agent's
-      claimed score is evidence, never fact
-- [x] Reconciler — four named exception classes plus an unsettled sweep
-- [x] Replay harness, 80/20 treated vs holdout, with a bootstrap interval
-- [x] Red team — 18 attacks, each asserted against the rule that must stop it
-- [x] Three new rules (block ceiling, risk evidence, settlement discrepancy)
-      and the risk side of the economics gate
-
-**Day 5 — Sept 2**
-- [x] Dashboard: scorecard, live decision feed, ledger viewer
-- [x] Full-month run end to end (this landed with the replay harness on day 4)
-- [x] CI that actually runs: lint, 227 tests, and the red team on every push
-- [x] Fix whatever breaks
-
-**Day 6 — Sept 3**
-- [x] Gemini planner driven against the installed SDK types, then the network
-      hop itself: `python -m agents.recovery` round-trips a live invoice, and
-      `--llm` reports how much of the run the model actually decided
-- [x] `.env` actually read; `engine.ledger verify` actually honours `CHECKPOST_DB`
-- [x] Setup documented from a clean clone, verified against one
-- [x] Interface run end to end — API, dashboard, ledger chain, the injection demo
-- [x] Human review queue — `needs_human` had nowhere to go; now it queues at
-      `/v1/pending`, a person signs it off on the dashboard, and the request goes
-      straight back through the rulebook so the second verdict is visible
-- [x] Approve is greyed out on escalations no signature can lift (`attempt_limit`
-      is telling you to stop chasing, not asking permission)
-- [x] Server finds the newest run in `data/` itself instead of serving a blank page
-- [x] README polish, architecture diagram
-
-**Day 7 — Sept 4**
-- [x] Full verification pass, nothing reused from the previous run: regenerate
-      the month from the recorded seed, replay it, run the red team, verify the
-      chain — plus 227 tests and pylint. Every number published above came back
-      identical; the ledger head is the only thing that moves between runs,
-      because it hashes timestamps
-- [x] Deleted the last copy of the key-shape claim. Day 6 removed it from
-      `.env.example`, the `GeminiPlanner` docstring and `decisions.md`, and
-      missed the probe's own no-key message — the one place still stating it as
-      fact rather than recounting it as a mistake, and the one a person reads at
-      exactly the moment it would cost them a day
-- [ ] Demo video
-- [ ] Dry run the pitch three times
 
 **Sept 5 — submit early in the day, not at midnight.**
 
@@ -440,7 +376,7 @@ our test cases instead of four separate projects.
 
 **Every build day is done; submission is Sept 5.** The layer is finished: all
 three agents run through it, the holdout experiment works, and every number
-above comes from a single reproducible command. 227 tests green, red team 18/18,
+above comes from a single reproducible command. 229 tests green, red team 18/18,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
@@ -492,7 +428,7 @@ The probe prints which planner was built, the proposal, and whether the call
 actually round-tripped, and exits non-zero if the key is missing or the call
 failed.
 
-### Seven defects this work surfaced, all fixed
+### Eight defects this work surfaced, all fixed
 
 The list is here on purpose. A project whose whole claim is *honest measurement*
 does not get to hide the times its own measurements were wrong.
@@ -542,6 +478,22 @@ does not get to hide the times its own measurements were wrong.
   starting `AIza`. It is 52 and starts `AQ.Ab8R`, and it works. Both the comment
   and the docstring repeating it are gone; the answer takes five seconds to
   fetch and nobody fetched it.
+- **The ledger had no lock, and a comment said it did.** One SQLite connection,
+  `check_same_thread=False`, shared across the threadpool FastAPI serves sync
+  endpoints on — while the dashboard polls `/v1/ledger`, `/v1/ledger/verify` and
+  `/v1/pending` together. So the overlap was the *normal* case, and unserialised
+  it failed three ways: `InterfaceError`, an `IndexError` out of `_row_to_entry`,
+  and `json.loads(None)` from a row whose columns came back misaligned. That
+  last one is why this is the worst defect on the list — a read that returns the
+  wrong bytes can fail `verify()` on an intact chain, and a false tamper alarm
+  is the one lie this project cannot afford. Concurrent *writes* were worse
+  still: 41 of 80 appends died on `UNIQUE constraint failed: ledger.seq`, the
+  survivors verified `ok=True`, and the only evidence was a count that had
+  quietly dropped to 17. Every path that touches the connection now takes one
+  lock. Found by reading the server log during a demo rehearsal, not by a test:
+  the whole suite drives `TestClient` one request at a time, so nothing had ever
+  overlapped two reads. The two tests added for it were checked against a
+  no-op lock first, because at 60 rows they passed either way.
 
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
@@ -569,7 +521,7 @@ copy .env.example .env      # optional: only the Gemini planner reads it
 The tests need nothing else — they build their own data in tmp directories:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q        # 227 tests, ~9s
+.venv\Scripts\python.exe -m pytest -q        # 229 tests, ~9s
 ```
 
 `python -m pytest`, not bare `pytest`: the module form puts the repo root on
