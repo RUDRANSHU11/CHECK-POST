@@ -49,7 +49,7 @@
     "needs_human": 45,
     "spend_paise": 916000,
     "ledger_entries": 6097,
-    "ledger_head": "64d320432992c697b445def82ccd27c8282e895a1119dc3e582046bfd532dad7",
+    "ledger_head": "60ee788228ef64fd1b154de50a7cd5cf22c63750476cbf40b9fd704b963833e8",
     "policy_version": "1.1"
   },
   "denials": {
@@ -67,5 +67,5 @@
     "entries_checked": 6097,
     "detail": "ledger intact \u2014 6097 entries verified"
   },
-  "generated_at": "2026-09-04T00:36:48.652063+00:00"
+  "generated_at": "2026-09-05T14:08:28.838353+00:00"
 }
