@@ -3,13 +3,14 @@ a restart."""
 
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
 
 import pytest
 
 from engine.gateway import Gateway
 from engine.ledger import Ledger
-from engine.policy import REFUND_HUMAN_THRESHOLD_PAISE
+from engine.policy import MAX_CONTACTS_PER_24H, REFUND_HUMAN_THRESHOLD_PAISE
 from engine.schema import (
     ActionRequest,
     ActionType,
@@ -343,3 +344,62 @@ def test_resubmit_of_an_unknown_request_raises(gateway):
     gateway.submit(rq(1), now=NOON_IST)
     with pytest.raises(KeyError):
         gateway.resubmit("rq_never_asked", now=NOON_IST)
+
+
+# -- concurrency ----------------------------------------------------------- #
+
+def test_one_idempotency_key_survives_concurrent_submits(gateway):
+    """The duplicate-refund guard has to hold when two agents post at once.
+
+    FastAPI serves these endpoints from a threadpool, so concurrent submits are
+    the ordinary case rather than a contrived one. submit() reads the counters
+    to build the context and writes them after the verdict, and every guard that
+    stops an action happening twice lives in that gap. Unserialised, eight
+    threads carrying one idempotency key all read "not yet used" and all eight
+    refunds were approved.
+
+    Checked against a no-op lock first: without the gateway's lock this test
+    fails with allowed == 8.
+    """
+    verdicts: dict[int, Verdict] = {}
+
+    def submit(n: int) -> None:
+        verdicts[n] = gateway.submit(
+            rq(
+                n,
+                ActionType.ISSUE_REFUND,
+                invoice_id="i_small",
+                payment_id="p_ok",
+                amount_paise=rupees(10),
+                idempotency_key="one:intent",
+            ),
+            now=NOON_IST,
+        ).verdict
+
+    threads = [threading.Thread(target=submit, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    allowed = [n for n, v in verdicts.items() if v is Verdict.ALLOW]
+    assert len(allowed) == 1, f"{len(allowed)} of 8 duplicates were approved"
+    assert gateway.ledger.verify().ok
+
+
+def test_concurrent_contacts_cannot_exceed_the_daily_quota(gateway):
+    """The same race, on the rule a judge is most likely to test by hand: two
+    contacts a day means two, not however many threads arrived together."""
+    verdicts: dict[int, Verdict] = {}
+
+    def submit(n: int) -> None:
+        verdicts[n] = gateway.submit(rq(n, ActionType.SEND_SMS), now=NOON_IST).verdict
+
+    threads = [threading.Thread(target=submit, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    allowed = sum(1 for v in verdicts.values() if v is Verdict.ALLOW)
+    assert allowed <= MAX_CONTACTS_PER_24H, f"{allowed} contacts allowed in one day"

@@ -23,6 +23,7 @@ free to come back with a better-founded request.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from datetime import datetime, timedelta
 
@@ -55,6 +56,26 @@ class Gateway:
     def __init__(self, store: DataStore, ledger: Ledger) -> None:
         self.store = store
         self.ledger = ledger
+
+        #: Held across a whole decision, not around each counter it touches.
+        #:
+        #: submit() reads the counters to build the context and writes them
+        #: after the verdict, and every guard that stops an action happening
+        #: twice lives in that gap: the idempotency key, the contact quota, the
+        #: attempt limit, the amount already refunded. Two threads interleaving
+        #: there both read "not yet used" and both get an allow. FastAPI serves
+        #: these endpoints from a threadpool, so two agents posting at once is
+        #: the ordinary case, not a contrived one — eight concurrent refunds
+        #: carrying one idempotency key were all approved before this existed.
+        #:
+        #: The ledger has its own lock for its own rows. That one keeps the
+        #: chain readable; this one keeps the *decision* correct, which is a
+        #: different claim and needs its own lock. Reentrant because resubmit()
+        #: is a public entry point that calls submit().
+        #:
+        #: Order is always gateway then ledger. The ledger never calls back in
+        #: here, so there is no second order to deadlock against.
+        self._lock = threading.RLock()
 
         self._contacts: dict[str, list[datetime]] = {}
         self._attempts: dict[str, int] = {}
@@ -206,6 +227,12 @@ class Gateway:
     # ------------------------------------------------------------------ #
 
     def submit(self, req: ActionRequest, now: datetime | None = None) -> Decision:
+        """Judge one request. The only public verb, and the whole of it is
+        serialised — see the note on ``_lock``."""
+        with self._lock:
+            return self._submit_locked(req, now)
+
+    def _submit_locked(self, req: ActionRequest, now: datetime | None = None) -> Decision:
         now = now or utcnow()
 
         # Record the ask first — see module docstring.
@@ -295,13 +322,14 @@ class Gateway:
         an approval granted yesterday cannot authorise contacting someone who
         opted out this morning.
         """
-        self._approved_requests.add(request_id)
-        self._pending.pop(request_id, None)
-        self.ledger.append(
-            "human_approval",
-            {"request_id": request_id, "approver": approver, "note": note,
-             "recorded_at": utcnow().isoformat()},
-        )
+        with self._lock:
+            self._approved_requests.add(request_id)
+            self._pending.pop(request_id, None)
+            self.ledger.append(
+                "human_approval",
+                {"request_id": request_id, "approver": approver, "note": note,
+                 "recorded_at": utcnow().isoformat()},
+            )
 
     def reject(self, request_id: str, approver: str, note: str = "") -> None:
         """Record a human refusing a needs_human request.
@@ -313,12 +341,13 @@ class Gateway:
         looks at and declines would sit there for good, and a queue that cannot
         be emptied stops being read.
         """
-        self._pending.pop(request_id, None)
-        self.ledger.append(
-            "human_rejection",
-            {"request_id": request_id, "approver": approver, "note": note,
-             "recorded_at": utcnow().isoformat()},
-        )
+        with self._lock:
+            self._pending.pop(request_id, None)
+            self.ledger.append(
+                "human_rejection",
+                {"request_id": request_id, "approver": approver, "note": note,
+                 "recorded_at": utcnow().isoformat()},
+            )
 
     def resubmit(self, request_id: str, now: datetime | None = None) -> Decision:
         """Judge a request again, from the ask exactly as it was first made.
@@ -332,11 +361,15 @@ class Gateway:
         Nothing here bypasses anything: it calls submit() like any agent would,
         so every rule runs again on the request as it stands now.
         """
-        # ponytail: linear scan of the log, once per human click on a queue of
-        # tens. Index request_id in SQLite if the queue is ever worked in bulk.
-        for entry in reversed(self.ledger.entries("request")):
-            if entry.payload["request_id"] == request_id:
-                return self.submit(ActionRequest(**entry.payload), now=now)
+        # Under the lock for the same reason submit() is: the scan reads the log
+        # and the submit that follows writes to it, and an approval landing in
+        # between would judge the request against a queue it is no longer in.
+        with self._lock:
+            # ponytail: linear scan of the log, once per human click on a queue
+            # of tens. Index request_id in SQLite if the queue is worked in bulk.
+            for entry in reversed(self.ledger.entries("request")):
+                if entry.payload["request_id"] == request_id:
+                    return self.submit(ActionRequest(**entry.payload), now=now)
         raise KeyError(request_id)
 
     def report_outcome(self, outcome: Outcome) -> None:
