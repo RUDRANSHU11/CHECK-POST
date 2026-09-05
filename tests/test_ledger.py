@@ -228,3 +228,17 @@ def test_concurrent_appends_each_get_their_own_link(ledger):
     result = ledger.verify()
     assert result.ok, result.detail
     assert result.entries_checked == 80
+
+
+def test_tail_returns_the_newest_entries_oldest_first(ledger):
+    """The feed endpoint's read. It used to be entries()[-limit:], which built a
+    model for every row in the table to keep the last few — on the one endpoint
+    the dashboard polls every three seconds."""
+    for i in range(120):
+        ledger.append("decision", {"request_id": f"rq_{i}"})
+
+    tail = ledger.tail(10)
+    assert [e.payload["request_id"] for e in tail] == [f"rq_{i}" for i in range(110, 120)]
+    assert [e.seq for e in tail] == sorted(e.seq for e in tail)
+    assert ledger.tail(500) == ledger.entries()
+    assert ledger.tail(0) == []

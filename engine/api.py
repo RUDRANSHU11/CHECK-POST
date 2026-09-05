@@ -23,7 +23,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
@@ -279,9 +279,15 @@ def rules() -> dict:
 
 
 @app.get("/v1/ledger")
-def ledger_tail(limit: int = 50) -> dict:
-    """The live decision feed the dashboard renders."""
-    entries = get_gateway().ledger.entries()[-limit:]
+def ledger_tail(limit: int = Query(50, ge=1, le=2000)) -> dict:
+    """The live decision feed the dashboard renders.
+
+    Bounded at both ends because the dashboard polls this every three seconds
+    and the query string is not ours: ``?limit=-1`` reached SQLite as a negative
+    LIMIT, which that engine reads as "no limit at all" and answers with the
+    whole chain.
+    """
+    entries = get_gateway().ledger.tail(limit)
     return {"count": len(entries), "entries": [e.model_dump(mode="json") for e in entries]}
 
 

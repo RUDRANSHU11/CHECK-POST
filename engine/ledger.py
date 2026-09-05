@@ -190,6 +190,21 @@ class Ledger:
         with self._lock:
             return [self._row_to_entry(r) for r in self.conn.execute(sql, args)]
 
+    def tail(self, limit: int = 50) -> list[LedgerEntry]:
+        """The newest ``limit`` entries, returned oldest first.
+
+        Not ``entries()[-limit:]``. That built a LedgerEntry for every row in
+        the table — 6,097 json.loads and 6,097 model constructions — and threw
+        all but the last few hundred away, on the one endpoint the dashboard
+        polls every three seconds. It also held the lock for the whole of it,
+        against a /v1/ledger/verify poll that legitimately needs every row.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM ledger ORDER BY seq DESC LIMIT ?", (max(0, limit),)
+            ).fetchall()
+        return [self._row_to_entry(r) for r in reversed(rows)]
+
     def _iter_rows(self) -> Iterator[sqlite3.Row]:
         # Fetched under the lock and then iterated, rather than streamed: a bare
         # generator holds the cursor open across the caller's work, and verify()
