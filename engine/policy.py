@@ -24,7 +24,7 @@ import inspect
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Any, Callable, Iterator
 
 from engine.schema import (
     ActionRequest,
@@ -401,6 +401,39 @@ def r12_write_off_ceiling(req: ActionRequest, ctx: PolicyContext) -> RuleResult 
     return _ok("write_off_ceiling", f"{fmt(amount)} is within the automatic write-off limit")
 
 
+#: How deep into a nested evidence value the scan will walk before it stops
+#: descending and hashes the rest as one blob. Untrusted input decides this
+#: shape, so the recursion needs a floor; nothing legitimate nests this far.
+MAX_EVIDENCE_DEPTH = 8
+
+
+def _strings_in(value: Any, path: str, depth: int = 0) -> Iterator[tuple[str, str]]:
+    """Every string anywhere inside an evidence value, each with a path to it.
+
+    ``evidence`` is ``dict[str, Any]``, which means the attacker picks the
+    shape. The first version of this rule scanned bare strings; lists were added
+    when the risk agent's ``signals`` walked past it. Both were the same hole
+    seen one level at a time — a payload one dict deeper, or in a list of dicts,
+    sailed through a rule whose entire job is to catch it. So walk the structure
+    instead of enumerating the shapes that have embarrassed us so far.
+
+    Past ``MAX_EVIDENCE_DEPTH`` the remaining subtree is yielded as a single
+    ``repr`` rather than abandoned: refusing to descend further must not become
+    a way to hide the text, and unbounded recursion on attacker-shaped input is
+    its own bug.
+    """
+    if isinstance(value, str):
+        yield path, value
+    elif depth >= MAX_EVIDENCE_DEPTH:
+        yield f"{path} (nested past depth {MAX_EVIDENCE_DEPTH})", repr(value)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _strings_in(item, f"{path}.{key}", depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for n, item in enumerate(value):
+            yield from _strings_in(item, f"{path}[{n}]", depth + 1)
+
+
 @rule
 def r13_prompt_injection(req: ActionRequest, ctx: PolicyContext) -> RuleResult | None:
     """Refuse actions whose supporting evidence contains instructions.
@@ -415,16 +448,7 @@ def r13_prompt_injection(req: ActionRequest, ctx: PolicyContext) -> RuleResult |
     suspects: list[tuple[str, str]] = []
     if ctx.invoice is not None and ctx.invoice.memo:
         suspects.append(("invoice memo", ctx.invoice.memo))
-    for key, value in req.evidence.items():
-        if isinstance(value, str):
-            suspects.append((f"evidence.{key}", value))
-        elif isinstance(value, (list, tuple)):
-            # The risk agent carries its signals as a list of strings. An
-            # injection that landed in a list rather than a bare string would
-            # otherwise walk straight past this guard.
-            for n, item in enumerate(value):
-                if isinstance(item, str):
-                    suspects.append((f"evidence.{key}[{n}]", item))
+    suspects.extend(_strings_in(req.evidence, "evidence"))
 
     for source, text in suspects:
         for pattern in INJECTION_PATTERNS:
