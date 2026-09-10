@@ -54,7 +54,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agents.recovery import RecoveryAgent, RulePlanner, build_planner
+from agents.recovery import RecoveryAgent, RulePlanner, build_planner, planner_note
 from agents.reconcile import ReconcileAgent
 from agents.risk import RiskAgent
 from engine.console import setup_console
@@ -421,18 +421,11 @@ def render(r: dict) -> str:
     def line(label: str, value: str, note: str = "") -> str:
         return f"{label:<40}{value:>18}   {note}".rstrip()
 
-    def _planner_note(r: dict) -> str:
-        """Says how much of `planner: gemini` was actually Gemini."""
-        calls, fell_back = r.get("planner_calls", 0), r.get("planner_fallbacks", 0)
-        if not calls or not fell_back:
-            return ""
-        return f" ({calls - fell_back}/{calls} live, {fell_back} fell back to rules)"
-
     rule = "-" * WIDTH
     out = [
         "",
         f"CHECKPOST SCORECARD                     batch {r['batch_id']}",
-        f"{r['days']} simulated days   planner: {r['planner']}{_planner_note(r)}   "
+        f"{r['days']} simulated days   planner: {r['planner']}{planner_note(r)}   "
         f"policy v{s['policy_version']}",
         "=" * WIDTH,
         "",

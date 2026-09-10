@@ -21,7 +21,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agents.recovery import RecoveryAgent, RulePlanner, build_planner
+from agents.recovery import RecoveryAgent, RulePlanner, build_planner, planner_note
 from engine.console import setup_console
 from engine.gateway import Gateway
 from engine.ledger import Ledger
@@ -76,6 +76,10 @@ def run(
 
     return {
         "planner": planner.name,
+        # Without these the header below names Gemini for a run the free tier
+        # quota handed to the rule planner after the twentieth invoice.
+        "planner_calls": getattr(planner, "calls", 0),
+        "planner_fallbacks": getattr(planner, "fallbacks", 0),
         "invoices_targeted": len(targets),
         "opening_book_paise": opening_book,
         "requests": worked,
@@ -98,7 +102,7 @@ def render(r: dict) -> str:
     lines = [
         "",
         f"CHECKPOST — first numbers            batch {s['batch_id']}",
-        f"planner: {r['planner']}    policy v{s['policy_version']}",
+        f"planner: {r['planner']}{planner_note(r)}    policy v{s['policy_version']}",
         "=" * 66,
         "",
         f"Invoices worked                        {r['invoices_targeted']:>10,}",

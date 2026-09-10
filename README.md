@@ -7,7 +7,7 @@
 
 Razorpay Buildathon 2026 — Track 05, Open Track.
 
-**16 rules · 235 tests · 19/19 red team · 6,097 ledger entries, chain intact.**
+**16 rules · 239 tests · 19/19 red team · 6,097 ledger entries, chain intact.**
 On a synthetic month: **₹12,82,464 net value created**, measured against a
 holdout and reported with a confidence interval.
 
@@ -327,7 +327,7 @@ checkpost/
 │   ├── replay.py         # treated vs holdout, and the scorecard
 │   ├── redteam.py        # 18 attacks, each expecting a named rule to stop it
 │   └── batch.py          # day-3 runner, no holdout — superseded by replay
-├── tests/                # 235 tests
+├── tests/                # 239 tests
 ├── web/
 │   └── index.html        # the dashboard — one file, no dependencies
 ├── out/scorecard.json    # written by the replay, read by the dashboard
@@ -378,7 +378,7 @@ our test cases instead of four separate projects.
 
 **Every build day is done; submission is Sept 5.** The layer is finished: all
 three agents run through it, the holdout experiment works, and every number
-above comes from a single reproducible command. 235 tests green, red team 19/19,
+above comes from a single reproducible command. 239 tests green, red team 19/19,
 pylint clean, CI green on every push. Remaining: the demo video and three pitch
 dry runs.
 
@@ -442,7 +442,7 @@ The probe prints which planner was built, the proposal, and whether the call
 actually round-tripped, and exits non-zero if the key is missing or the call
 failed.
 
-### Eleven defects this work surfaced, all fixed
+### Thirteen defects this work surfaced, all fixed
 
 The list is here on purpose. A project whose whole claim is *honest measurement*
 does not get to hide the times its own measurements were wrong.
@@ -539,6 +539,25 @@ does not get to hide the times its own measurements were wrong.
   overlapped two reads. The two tests added for it were checked against a
   no-op lock first, because at 60 rows they passed either way.
 
+- **`.env.example` shipped the one setting that breaks a fresh clone.** The
+  server picks the newest non-empty ledger in `data/` by itself, precisely so
+  starting it the obvious way does not serve a blank dashboard — and then
+  `.env.example` carried `CHECKPOST_DB=data/checkpost.db` live, on the line
+  below a comment describing that exact trap. `copy .env.example .env` is the
+  first instruction in the setup section, so following the README turned the
+  auto-pick off and pinned the API to the 0-entry database. Now commented out,
+  and pointing at `data/replay.db` if anyone does want to pin a run. The fix in
+  `pick_db()` was real; the file undoing it was the last copy of the bug.
+- **One harness said how much of `planner: gemini` was Gemini, and the other
+  didn't.** `harness.replay` grew `planner_calls` and `planner_fallbacks` when
+  the free tier's quota turned an `--llm` run into 124 rule-planner decisions
+  under a Gemini header. `harness.batch` prints the same header from the same
+  planner and never got them, so `batch --llm` kept making the claim replay had
+  already been corrected for. The note is now one function in `agents.recovery`,
+  next to the planners rather than inside either harness's renderer, and both
+  call it — a fact about the planner that lived in one of its two readers was
+  always going to be fixed in one of them.
+
 See `flow.md` for how the codebase fits together and `decisions.md` for why.
 
 ---
@@ -579,10 +598,29 @@ python -m venv .venv
 copy .env.example .env      # optional: only the Gemini planner reads it
 ```
 
+Copy `.env.example` as it stands — `CHECKPOST_DB` is commented out on purpose.
+Setting it turns off the server's own pick of the newest run in `data/`, and the
+value that file used to ship pointed at `data/checkpost.db`, which is the one
+database that is reliably empty. That combination is a blank dashboard with
+nothing on screen saying why.
+
+Everything in this README runs with `GEMINI_API_KEY` left blank; the rule planner
+produces every number here. To turn the LLM planner on, put a key in and settle
+it in five seconds rather than by inspection:
+
+```powershell
+.venv\Scripts\python.exe -m agents.recovery   # one live invoice, one round trip
+```
+
+It names the planner it built, prints the proposal, and exits non-zero if the key
+is missing or the call did not round-trip. What the free tier's 20 requests a day
+does to a full `--llm` replay is in
+[What is proven, and what isn't](#what-is-proven-and-what-isnt).
+
 The tests need nothing else — they build their own data in tmp directories:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q        # 235 tests, ~20s
+.venv\Scripts\python.exe -m pytest -q        # 239 tests, ~45s warm (double that on a cold first run)
 ```
 
 `python -m pytest`, not bare `pytest`: the module form puts the repo root on

@@ -13,6 +13,7 @@ from agents.recovery import (
     RecoveryAgent,
     RulePlanner,
     build_planner,
+    planner_note,
 )
 from engine.schema import ActionType, Verdict, rupees
 from tests.conftest import NOON_IST
@@ -304,3 +305,31 @@ def test_the_gateway_refuses_the_discount_the_model_invented(store, gateway):
         r.rule_id == "discount_ceiling" and r.verdict is Verdict.NEEDS_HUMAN
         for r in decision.results
     )
+
+
+# --------------------------------------------------------------------------- #
+# Who actually decided
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        # Nothing fell back: the header names the planner and stops there.
+        ({"planner_calls": 124, "planner_fallbacks": 0}, ""),
+        # The rule planner never calls anything, so it never gets a note.
+        ({}, ""),
+        # The free tier running out mid-run. This is the case the note exists
+        # for: `planner: gemini` above 124 decisions Gemini did not make.
+        (
+            {"planner_calls": 124, "planner_fallbacks": 124},
+            " (0/124 live, 124 fell back to rules)",
+        ),
+        (
+            {"planner_calls": 124, "planner_fallbacks": 104},
+            " (20/124 live, 104 fell back to rules)",
+        ),
+    ],
+)
+def test_planner_note_states_how_much_was_really_the_model(result, expected):
+    assert planner_note(result) == expected

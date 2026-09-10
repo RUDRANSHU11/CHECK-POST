@@ -306,6 +306,26 @@ def build_planner() -> Planner:
         return RulePlanner()
 
 
+def planner_note(result: dict) -> str:
+    """How much of a ``planner: gemini`` line was actually Gemini.
+
+    A scorecard header naming the planner is a claim about who decided, and on
+    the free tier (20 requests a day for gemini-2.5-flash) it stops being true
+    at call 21 without anything else on the page changing. Both harnesses print
+    that header, so both need this; it lives here rather than in either of them
+    because it is a fact about the planner, and because having it in one of the
+    two is how ``batch`` spent its life claiming credit ``replay`` had already
+    learned not to.
+
+    Empty when nothing fell back, so a fully live run reads plainly.
+    """
+    calls = result.get("planner_calls", 0)
+    fell_back = result.get("planner_fallbacks", 0)
+    if not calls or not fell_back:
+        return ""
+    return f" ({calls - fell_back}/{calls} live, {fell_back} fell back to rules)"
+
+
 # --------------------------------------------------------------------------- #
 # The agent
 # --------------------------------------------------------------------------- #
